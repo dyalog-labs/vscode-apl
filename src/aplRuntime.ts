@@ -137,7 +137,7 @@ export class AplRuntime extends EventEmitter {
 			await this.exec(0, `name←⊃2 ⎕FIX 'file://${this._sourceFile}'`, 1);
 		}
 		await this.getLinkInfo();
-		this.initialiseBreakpoints();
+		await this.initialiseBreakpoints();
 		if (this._sourceFile) {
 			await this.exec(this._trace ? 1 : 0, '⍎name', 1);
 		}
@@ -167,11 +167,17 @@ export class AplRuntime extends EventEmitter {
 
 		// Get link info from existing session
 		await this.getLinkInfo();
-		this.initialiseBreakpoints();
 
-		// If a program was specified, fix and run it
+		// If a program was specified, fix it first (before setting breakpoints)
 		if (this._sourceFile) {
 			await this.exec(0, `name←⊃2 ⎕FIX 'file://${this._sourceFile}'`, 1);
+		}
+
+		// Set breakpoints AFTER ⎕FIX (⎕FIX clears stops on the function)
+		await this.initialiseBreakpoints();
+
+		// Now run the program
+		if (this._sourceFile) {
 			await this.exec(this._trace ? 1 : 0, '⍎name', 1);
 		} else {
 			// No program - just emit stopOnEntry if requested
@@ -212,8 +218,12 @@ export class AplRuntime extends EventEmitter {
 		}).catch(this.err);
 	}
 	
-	private initialiseBreakpoints() {
-		this._breakPoints.forEach(this.setBreakPointOnFile.bind(this));
+	private async initialiseBreakpoints() {
+		const promises: Promise<void>[] = [];
+		this._breakPoints.forEach((bps, filePath) => {
+			promises.push(this.setBreakPointOnFile(bps, filePath));
+		});
+		await Promise.all(promises);
 	}
 
 	private _terminate: any;
@@ -891,28 +901,31 @@ export class AplRuntime extends EventEmitter {
 		return bp;
 	}
 
-	private setBreakPointOnFile(bps: IAplBreakpoint[], filePath: string) {
+	private async setBreakPointOnFile(bps: IAplBreakpoint[], filePath: string): Promise<void> {
 		const fnbp = {};
-		if (this._linkInfo.length === 0) return;
+		if (this._linkInfo.length === 0) {
+			return;
+		}
+		const normalizedPath = this.normPath(filePath);
 		bps.forEach((bp) => {
-			const row = this._linkInfo.find((row) => row.filePath === filePath && row.startLine < bp.line);
+			const row = this._linkInfo.find((row) => this.normPath(row.filePath) === normalizedPath && row.startLine < bp.line);
 			if (row) {
 				const lines = fnbp[row.aplName] || [];
 				lines.push(bp.line - row.startLine);
 				fnbp[row.aplName] = lines;
 			}
 		});
-		Object.keys(fnbp).forEach(async (aplName) => {
+		for (const aplName of Object.keys(fnbp)) {
 			const lines = fnbp[aplName].join(' ');
 			await this.exec(0, `{}${lines} ⎕STOP '${aplName}'`, 1);
-		})
+		}
 	}
 
 	/*
 	 * Clear breakpoint in file with given line.
 	 */
 	public clearBreakPoint(path: string, line: number): IAplBreakpoint | undefined {
-		const bps = this._breakPoints.get(path);
+		const bps = this._breakPoints.get(this.normPath(path));
 		if (bps) {
 			const index = bps.findIndex(bp => bp.line === line);
 			if (index >= 0) {
@@ -952,7 +965,7 @@ export class AplRuntime extends EventEmitter {
 			return;
 		}
 
-		const bps = this._breakPoints.get(path);
+		const bps = this._breakPoints.get(this.normPath(path));
 		if (bps) {
 			bps.forEach(bp => {
 				if (!bp.verified && lines.includes(bp.line)) {
