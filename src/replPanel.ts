@@ -298,8 +298,13 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 				break;
 
 			default:
-				this._appendOutput('error', `Unknown command: ${code}`);
-				this._appendOutput('system', 'Type /help for available commands.');
+				// Check for commands with arguments
+				if (cmd.startsWith('/link')) {
+					await this._handleLink(code);
+				} else {
+					this._appendOutput('error', `Unknown command: ${code}`);
+					this._appendOutput('system', 'Type /help for available commands.');
+				}
 				break;
 		}
 	}
@@ -399,6 +404,7 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 	 */
 	private _showReplHelp(): void {
 		this._appendOutput('system', '=== APL REPL Commands ===');
+		this._appendOutput('result', '/link [ns]    - Link workspace folder to namespace (default: #)');
 		this._appendOutput('result', '/bt, /si      - Show stack trace (debug mode)');
 		this._appendOutput('result', '/vars         - Show variables (debug mode)');
 		this._appendOutput('result', '/status       - Show connection/debug status');
@@ -427,6 +433,42 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 			this._appendOutput('system', 'Disconnected from interpreter.');
 		} else {
 			this._appendOutput('system', 'Not connected.');
+		}
+	}
+
+	/**
+	 * Handle link command - links workspace folder to APL namespace
+	 */
+	private async _handleLink(code: string): Promise<void> {
+		// Parse namespace from command: /link [namespace]
+		const parts = code.trim().split(/\s+/);
+		const namespace = parts[1] || '#';
+
+		// Get workspace folder
+		const workspaceFolders = vscode.workspace.workspaceFolders;
+		if (!workspaceFolders || workspaceFolders.length === 0) {
+			this._appendOutput('error', 'No workspace folder open.');
+			return;
+		}
+
+		const folderPath = workspaceFolders[0].uri.fsPath.replace(/\\/g, '/');
+		const linkCmd = `⎕SE.Link.Create '${namespace}' '${folderPath}'`;
+
+		this._appendOutput('input', linkCmd);
+
+		if (this._isDebugMode && this._debugSession) {
+			try {
+				await this._debugSession.customRequest('evaluate', {
+					expression: linkCmd,
+					context: 'repl'
+				});
+			} catch (error: any) {
+				this._appendOutput('error', `Link failed: ${error.message}`);
+			}
+		} else if (this._session.isConnected) {
+			this._session.execute(linkCmd);
+		} else {
+			this._appendOutput('error', 'Not connected to interpreter.');
 		}
 	}
 
