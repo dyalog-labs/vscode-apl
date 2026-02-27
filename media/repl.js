@@ -138,6 +138,14 @@
 		interruptBtn.disabled = status !== 'busy';
 	}
 
+	// Set debug mode indicator
+	function setDebugMode(isDebug) {
+		const debugIndicator = document.getElementById('debug-indicator');
+		if (debugIndicator) {
+			debugIndicator.style.display = isDebug ? 'inline' : 'none';
+		}
+	}
+
 	// Handle messages from extension
 	window.addEventListener('message', event => {
 		const message = event.data;
@@ -171,6 +179,10 @@
 
 			case 'focus':
 				inputEl.focus();
+				break;
+
+			case 'setDebugMode':
+				setDebugMode(message.isDebug);
 				break;
 		}
 	});

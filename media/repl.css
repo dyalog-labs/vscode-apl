@@ -67,6 +67,22 @@ body {
 	color: var(--status-busy);
 }
 
+#status.connecting {
+	color: var(--status-busy);
+}
+
+/* Debug mode indicator */
+#debug-indicator {
+	display: none;
+	font-size: 11px;
+	padding: 2px 6px;
+	border-radius: 3px;
+	background: var(--vscode-debugIcon-startForeground);
+	color: var(--vscode-editor-background);
+	font-weight: 500;
+	margin-left: 4px;
+}
+
 #toolbar button {
 	background: var(--button-bg);
 	color: var(--button-fg);

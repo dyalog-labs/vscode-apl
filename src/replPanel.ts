@@ -13,12 +13,15 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 	private _inputHistory: string[] = [];
 	private _session: AplSession;
 	private _disposables: vscode.Disposable[] = [];
+	private _debugSession?: vscode.DebugSession;
+	private _isDebugMode = false;
 
 	constructor(
 		private readonly _extensionUri: vscode.Uri,
 	) {
 		this._session = AplSession.getInstance();
 		this._setupSessionListeners();
+		this._setupDebugListeners();
 	}
 
 	private _setupSessionListeners(): void {
@@ -37,11 +40,6 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 			// Input is already shown, echo confirms execution started
 		});
 
-		// Listen for ready event
-		this._session.on('ready', () => {
-			this._appendOutput('system', 'APL session ready.');
-		});
-
 		// Listen for end event
 		this._session.on('end', () => {
 			this._appendOutput('system', 'Session ended.');
@@ -50,6 +48,73 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 		// Listen for errors
 		this._session.on('error', (error: Error) => {
 			this._appendOutput('error', `Error: ${error.message}`);
+		});
+	}
+
+	private _setupDebugListeners(): void {
+		// Register debug adapter tracker to capture output
+		this._disposables.push(
+			vscode.debug.registerDebugAdapterTrackerFactory('apl', {
+				createDebugAdapterTracker: (_session) => {
+					return {
+						onDidSendMessage: (message: any) => {
+							// Capture output events from the debug adapter
+							if (message.type === 'event' && message.event === 'output') {
+								const body = message.body;
+								if (body && body.output) {
+									const category = body.category || 'stdout';
+									const type = category === 'stderr' ? 'error' : 'result';
+									// Don't duplicate input echo
+									if (!body.output.startsWith('      ')) {
+										this._appendOutput(type, body.output.trimEnd());
+									}
+								}
+							}
+						}
+					};
+				}
+			})
+		);
+
+		// Listen for debug session start
+		this._disposables.push(
+			vscode.debug.onDidStartDebugSession((session) => {
+				if (session.type === 'apl') {
+					this._debugSession = session;
+					this._isDebugMode = true;
+					this._appendOutput('system', `Debug session started: ${session.name}`);
+					this._updateDebugMode(true);
+				}
+			})
+		);
+
+		// Listen for debug session end
+		this._disposables.push(
+			vscode.debug.onDidTerminateDebugSession((session) => {
+				if (session.type === 'apl' && this._debugSession?.id === session.id) {
+					this._debugSession = undefined;
+					this._isDebugMode = false;
+					this._appendOutput('system', 'Debug session ended.');
+					this._updateDebugMode(false);
+				}
+			})
+		);
+
+		// Check if there's already an active debug session
+		const activeSession = vscode.debug.activeDebugSession;
+		if (activeSession?.type === 'apl') {
+			this._debugSession = activeSession;
+			this._isDebugMode = true;
+		}
+	}
+
+	/**
+	 * Update webview with debug mode state
+	 */
+	private _updateDebugMode(isDebug: boolean): void {
+		this._view?.webview.postMessage({
+			command: 'setDebugMode',
+			isDebug
 		});
 	}
 
@@ -105,8 +170,13 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 		}
 		this._updateStatus(this._session.state);
 
-		// Auto-connect based on setting
-		this._autoConnect();
+		// Send initial debug mode state
+		this._updateDebugMode(this._isDebugMode);
+
+		// Auto-connect based on setting (only if not debugging)
+		if (!this._isDebugMode) {
+			this._autoConnect();
+		}
 	}
 
 	/**
@@ -161,7 +231,27 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 		// Echo the input with 6-space indent (like APL session)
 		this._appendOutput('input', `      ${code}`);
 
-		// Ensure connected
+		// Check for special REPL commands
+		if (code.startsWith('/')) {
+			await this._handleSpecialCommand(code);
+			return;
+		}
+
+		// If in debug mode, use the debug session
+		if (this._isDebugMode && this._debugSession) {
+			try {
+				// Use the debug adapter's evaluate request for REPL context
+				await this._debugSession.customRequest('evaluate', {
+					expression: code,
+					context: 'repl'
+				});
+			} catch (error: any) {
+				this._appendOutput('error', `Debug execution error: ${error.message}`);
+			}
+			return;
+		}
+
+		// Standalone mode: ensure connected to AplSession
 		if (!this._session.isConnected) {
 			await this._handleConnect();
 			if (!this._session.isConnected) {
@@ -170,8 +260,172 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 			}
 		}
 
-		// Execute
+		// Execute via standalone session
 		this._session.execute(code);
+	}
+
+	/**
+	 * Handle special REPL commands (starting with /)
+	 */
+	private async _handleSpecialCommand(code: string): Promise<void> {
+		const cmd = code.toLowerCase().trim();
+
+		switch (cmd) {
+			case '/bt':
+			case '/backtrace':
+			case '/si':
+				await this._showStackTrace();
+				break;
+
+			case '/vars':
+			case '/variables':
+				await this._showVariables();
+				break;
+
+			case '/debug':
+			case '/status':
+				this._showDebugStatus();
+				break;
+
+			case '/help':
+				this._showReplHelp();
+				break;
+
+			case '/disconnect':
+				this._handleDisconnect();
+				break;
+
+			default:
+				this._appendOutput('error', `Unknown command: ${code}`);
+				this._appendOutput('system', 'Type /help for available commands.');
+				break;
+		}
+	}
+
+	/**
+	 * Show stack trace (during debug)
+	 */
+	private async _showStackTrace(): Promise<void> {
+		if (!this._isDebugMode || !this._debugSession) {
+			this._appendOutput('system', 'Stack trace is only available during debugging.');
+			this._appendOutput('system', 'Use )SI in APL to see the state indicator.');
+			return;
+		}
+
+		try {
+			const response = await this._debugSession.customRequest('stackTrace', {
+				threadId: 1,
+				startFrame: 0,
+				levels: 20
+			});
+
+			if (response.stackFrames && response.stackFrames.length > 0) {
+				this._appendOutput('system', '=== Stack Trace ===');
+				response.stackFrames.forEach((frame: any, index: number) => {
+					const location = frame.source?.name
+						? `${frame.source.name}:${frame.line}`
+						: `line ${frame.line}`;
+					this._appendOutput('result', `[${index}] ${frame.name} (${location})`);
+				});
+			} else {
+				this._appendOutput('system', 'No active stack frames.');
+			}
+		} catch (error: any) {
+			this._appendOutput('error', `Failed to get stack trace: ${error.message}`);
+		}
+	}
+
+	/**
+	 * Show variables (during debug)
+	 */
+	private async _showVariables(): Promise<void> {
+		if (!this._isDebugMode || !this._debugSession) {
+			this._appendOutput('system', 'Variables view is only available during debugging.');
+			this._appendOutput('system', 'Use )VARS in APL to see workspace variables.');
+			return;
+		}
+
+		try {
+			// Get scopes first
+			const scopesResponse = await this._debugSession.customRequest('scopes', {
+				frameId: 0
+			});
+
+			if (scopesResponse.scopes && scopesResponse.scopes.length > 0) {
+				this._appendOutput('system', '=== Variables ===');
+
+				for (const scope of scopesResponse.scopes) {
+					this._appendOutput('system', `--- ${scope.name} ---`);
+
+					const varsResponse = await this._debugSession.customRequest('variables', {
+						variablesReference: scope.variablesReference
+					});
+
+					if (varsResponse.variables && varsResponse.variables.length > 0) {
+						varsResponse.variables.forEach((v: any) => {
+							const value = v.value.length > 50
+								? v.value.substring(0, 47) + '...'
+								: v.value;
+							this._appendOutput('result', `  ${v.name}: ${value}`);
+						});
+					} else {
+						this._appendOutput('result', '  (no variables)');
+					}
+				}
+			}
+		} catch (error: any) {
+			this._appendOutput('error', `Failed to get variables: ${error.message}`);
+		}
+	}
+
+	/**
+	 * Show debug status
+	 */
+	private _showDebugStatus(): void {
+		if (this._isDebugMode && this._debugSession) {
+			this._appendOutput('system', `Debug mode: ACTIVE`);
+			this._appendOutput('system', `Session: ${this._debugSession.name}`);
+			this._appendOutput('system', 'REPL commands are executed in debug context.');
+		} else {
+			this._appendOutput('system', `Debug mode: INACTIVE`);
+			this._appendOutput('system', `Standalone session: ${this._session.isConnected ? 'Connected' : 'Disconnected'}`);
+		}
+	}
+
+	/**
+	 * Show REPL help
+	 */
+	private _showReplHelp(): void {
+		this._appendOutput('system', '=== APL REPL Commands ===');
+		this._appendOutput('result', '/bt, /si      - Show stack trace (debug mode)');
+		this._appendOutput('result', '/vars         - Show variables (debug mode)');
+		this._appendOutput('result', '/status       - Show connection/debug status');
+		this._appendOutput('result', '/disconnect   - Disconnect from interpreter');
+		this._appendOutput('result', '/help         - Show this help');
+		this._appendOutput('system', '');
+		this._appendOutput('system', 'APL system commands:');
+		this._appendOutput('result', ')SI           - State indicator');
+		this._appendOutput('result', ')VARS         - Workspace variables');
+		this._appendOutput('result', ')FNS          - User functions');
+		this._appendOutput('result', ')CLEAR        - Clear workspace');
+	}
+
+	/**
+	 * Handle disconnect
+	 */
+	private _handleDisconnect(): void {
+		if (this._isDebugMode) {
+			this._appendOutput('system', 'Cannot disconnect during debug session.');
+			this._appendOutput('system', 'Stop the debug session first.');
+			return;
+		}
+
+		if (this._session.isConnected) {
+			this._session.disconnect();
+			this._appendOutput('system', 'Disconnected from interpreter.');
+		} else {
+			this._appendOutput('system', 'Not connected.');
+		}
 	}
 
 	/**
@@ -276,6 +530,7 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 	<div id="repl-container">
 		<div id="toolbar">
 			<span id="status" class="disconnected">Disconnected</span>
+			<span id="debug-indicator">DEBUG</span>
 			<button id="clear-btn" title="Clear output">Clear</button>
 			<button id="interrupt-btn" title="Interrupt execution" disabled>Interrupt</button>
 		</div>
