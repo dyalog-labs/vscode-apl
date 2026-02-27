@@ -147,9 +147,10 @@ export class AplRuntime extends EventEmitter {
 	 * Attach to an existing AplSession (REPL) instead of spawning new interpreter.
 	 * This allows debugging within the same Dyalog session as the REPL.
 	 */
-	public async attachToSession(session: AplSession, program: string, folder: string, stopOnEntry: boolean): Promise<void> {
+	public async attachToSession(session: AplSession, program: string, folder: string, stopOnEntry: boolean, noDebug: boolean): Promise<void> {
 		this._session = session;
 		this._attachedToSession = true;
+		this._noDebug = noDebug;
 		this._sourceFile = program;
 		this._folder = folder;
 		this._link = `${this._folder}/.vscode/link.json`;

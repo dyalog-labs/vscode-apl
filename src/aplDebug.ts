@@ -225,7 +225,7 @@ export class AplDebugSession extends LoggingDebugSession {
 		const session = AplSession.getInstance();
 		if (session.isConnected) {
 			// Attach to existing REPL session instead of spawning new interpreter
-			await this._runtime.attachToSession(session, args.program, args.cwd, !!args.stopOnEntry);
+			await this._runtime.attachToSession(session, args.program, args.cwd, !!args.stopOnEntry, !!args.noDebug);
 		} else {
 			// No REPL session - spawn new interpreter
 			await this._runtime.start(args.exe, args.dyalogCfg, args.program, args.cwd, !!args.stopOnEntry, !!args.noDebug);

@@ -81,8 +81,12 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 			vscode.debug.onDidStartDebugSession((session) => {
 				if (session.type === 'apl') {
 					this._debugSession = session;
-					this._isDebugMode = true;
-					this._updateDebugMode(true);
+					// Only set debug mode if not a noDebug run
+					const isNoDebug = (session.configuration as any).noDebug === true;
+					if (!isNoDebug) {
+						this._isDebugMode = true;
+						this._updateDebugMode(true);
+					}
 					// Focus the REPL panel instead of Debug Console
 					this._view?.show(false);
 				}
@@ -104,7 +108,8 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 		const activeSession = vscode.debug.activeDebugSession;
 		if (activeSession?.type === 'apl') {
 			this._debugSession = activeSession;
-			this._isDebugMode = true;
+			const isNoDebug = (activeSession.configuration as any).noDebug === true;
+			this._isDebugMode = !isNoDebug;
 		}
 	}
 

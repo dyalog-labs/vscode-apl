@@ -221,8 +221,22 @@ class AplConfigurationProvider implements vscode.DebugConfigurationProvider {
 				config.name = 'Launch';
 				config.request = 'launch';
 				config.program = '${file}';
-				config.cwd = folder;
+				config.cwd = folder?.uri.fsPath;
 				config.stopOnEntry = true;
+			}
+		}
+
+		// Set cwd from workspace folder if not provided
+		if (!config.cwd) {
+			if (folder) {
+				config.cwd = folder.uri.fsPath;
+			} else if (config.program) {
+				// Try to find workspace folder containing the program
+				const programUri = vscode.Uri.file(config.program);
+				const wsFolder = vscode.workspace.getWorkspaceFolder(programUri);
+				if (wsFolder) {
+					config.cwd = wsFolder.uri.fsPath;
+				}
 			}
 		}
 
