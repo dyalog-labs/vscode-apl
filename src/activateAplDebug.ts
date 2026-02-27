@@ -8,6 +8,7 @@ import * as vscode from 'vscode';
 import { WorkspaceFolder, DebugConfiguration, ProviderResult, CancellationToken } from 'vscode';
 import { AplDebugSession } from './aplDebug';
 import { FileAccessor } from './aplRuntime';
+import { ReplViewProvider } from './replPanel';
 
 let aplStatusBarItem: vscode.StatusBarItem;
 
@@ -17,7 +18,29 @@ export function activateAplDebug(context: vscode.ExtensionContext, factory?: vsc
 	aplStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
 	aplStatusBarItem.show();
 	// aplStatusBarItem.command = myCommandId;
-	
+
+	// Register the REPL view provider for bottom panel
+	const replProvider = new ReplViewProvider(context.extensionUri);
+	context.subscriptions.push(
+		vscode.window.registerWebviewViewProvider(ReplViewProvider.viewType, replProvider, {
+			webviewOptions: { retainContextWhenHidden: true }
+		})
+	);
+
+	// Register REPL commands
+	context.subscriptions.push(
+		vscode.commands.registerCommand('apl.focusRepl', () => {
+			vscode.commands.executeCommand('aplRepl.focus');
+		}),
+		vscode.commands.registerCommand('apl.repl.clear', () => {
+			replProvider.clear();
+		}),
+		vscode.commands.registerCommand('apl.repl.interrupt', () => {
+			// TODO: Phase 2 - Send interrupt to runtime
+			vscode.window.showInformationMessage('Interrupt not yet implemented');
+		})
+	);
+
 	context.subscriptions.push(
 		aplStatusBarItem,
 		vscode.commands.registerCommand('extension.apl-debug.runEditorContents', (resource: vscode.Uri) => {

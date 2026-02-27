@@ -67,12 +67,31 @@
   "activationEvents": [
     "onDebugResolve:apl",
     "onDebugDynamicConfigurations:apl",
-    "onCommand:extension.apl-debug.getProgramName"
+    "onCommand:extension.apl-debug.getProgramName",
+    "onView:aplRepl"
   ],
   "workspaceTrust": {
     "request": "never"
   },
   "contributes": {
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "apl-repl-panel",
+          "title": "APL",
+          "icon": "$(terminal)"
+        }
+      ]
+    },
+    "views": {
+      "apl-repl-panel": [
+        {
+          "id": "aplRepl",
+          "name": "APL REPL",
+          "type": "webview"
+        }
+      ]
+    },
     "keybindings": [
       {
         "command": "extension.apl-debug.traceBackward",
@@ -102,6 +121,11 @@
       {
         "command": "extension.apl-debug.help",
         "key": "F1"
+      },
+      {
+        "command": "apl.focusRepl",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r"
       }
     ],
     "menus": {
@@ -195,6 +219,21 @@
       {
         "command": "extension.apl-debug.toggleFormatting",
         "title": "Toggle between decimal and hex formatting"
+      },
+      {
+        "command": "apl.focusRepl",
+        "title": "Focus APL REPL",
+        "category": "APL"
+      },
+      {
+        "command": "apl.repl.clear",
+        "title": "Clear REPL Output",
+        "category": "APL"
+      },
+      {
+        "command": "apl.repl.interrupt",
+        "title": "Interrupt Execution",
+        "category": "APL"
       }
     ],
     "breakpoints": [

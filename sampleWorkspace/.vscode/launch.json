@@ -7,8 +7,8 @@
 		{
 			"type": "apl",
 			"request": "launch",
-			"name": "Debug current file 18.0",
-			"exe": "C:\\Program Files\\Dyalog\\Dyalog APL-64 18.0 Unicode\\dyalog.exe",
+			"name": "Debug current file 20.0",
+			"exe": "C:\\Program Files\\Dyalog\\Dyalog APL-64 20.0 Unicode\\dyalog.exe",
 			"program": "${file}",
 			"cwd": "${workspaceFolder}",
 			"stopOnEntry": true,
