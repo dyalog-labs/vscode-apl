@@ -60,6 +60,9 @@ export class AplSession extends EventEmitter {
 	private _rundownTimeout = 0;
 	private _maxLogLength = 1000;
 
+	// Debug handler for delegating debug-specific messages
+	private _debugHandler?: (command: string, args: any) => void;
+
 	public static getInstance(): AplSession {
 		if (!AplSession._instance) {
 			AplSession._instance = new AplSession();
@@ -77,6 +80,35 @@ export class AplSession extends EventEmitter {
 
 	public get isConnected(): boolean {
 		return this._state === 'connected' || this._state === 'busy';
+	}
+
+	/**
+	 * Set a debug handler to receive debug-specific RIDE messages.
+	 * Used by AplRuntime when attaching to an existing session.
+	 */
+	public setDebugHandler(handler: (command: string, args: any) => void): void {
+		this._debugHandler = handler;
+	}
+
+	/**
+	 * Clear the debug handler (called when debug session ends).
+	 */
+	public clearDebugHandler(): void {
+		this._debugHandler = undefined;
+	}
+
+	/**
+	 * Check if a debug handler is attached.
+	 */
+	public get hasDebugHandler(): boolean {
+		return this._debugHandler !== undefined;
+	}
+
+	/**
+	 * Get the underlying socket client (for AplRuntime attachment).
+	 */
+	public get client(): Net.Socket | undefined {
+		return this._client;
 	}
 
 	/**
@@ -355,6 +387,13 @@ export class AplSession extends EventEmitter {
 	}
 
 	private handleMessage(command: string, args: any): void {
+		// When debug handler is attached, forward ALL messages to it first
+		// This allows AplRuntime to process messages it needs (SetPromptType, EchoInput, etc.)
+		if (this._debugHandler) {
+			this._debugHandler(command, args);
+		}
+
+		// Then handle REPL-specific processing
 		switch (command) {
 			case 'Identify':
 				this.log(`Connected to Dyalog APL ${args.version}`);
@@ -413,14 +452,14 @@ export class AplSession extends EventEmitter {
 				this.emit('output', `System Error: ${args.text}`, 'error');
 				this.emit('end');
 				break;
-
-			default:
-				// Ignore other messages for REPL
-				break;
 		}
 	}
 
-	private sendMessage(command: string, args: object): void {
+	/**
+	 * Send a RIDE protocol message to the interpreter.
+	 * Public to allow AplRuntime to send messages through shared session.
+	 */
+	public sendMessage(command: string, args: object): void {
 		if (this._client) {
 			const message = JSON.stringify([command, args]);
 			this.log(`send ${this.truncate(message)}`);

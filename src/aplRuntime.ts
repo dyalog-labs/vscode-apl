@@ -7,6 +7,7 @@ import * as cp from 'child_process';
 import * as Path from 'path';
 import * as Net from 'net';
 import { Subject } from 'await-notify';
+import { AplSession } from './aplSession';
 
 export interface FileAccessor {
 	isWindows: boolean;
@@ -82,6 +83,8 @@ export class AplRuntime extends EventEmitter {
 	private _link = '';
 
 	private _client?: Net.Socket;
+	private _session?: AplSession;  // Shared session when attached to REPL
+	private _attachedToSession = false;  // Flag to indicate if using shared session
 
 	private _exe = 'dyalog.exe';
 	private _dyalogCfg: string | undefined;
@@ -140,6 +143,54 @@ export class AplRuntime extends EventEmitter {
 		}
 	}
 
+	/**
+	 * Attach to an existing AplSession (REPL) instead of spawning new interpreter.
+	 * This allows debugging within the same Dyalog session as the REPL.
+	 */
+	public async attachToSession(session: AplSession, program: string, folder: string, stopOnEntry: boolean): Promise<void> {
+		this._session = session;
+		this._attachedToSession = true;
+		this._sourceFile = program;
+		this._folder = folder;
+		this._link = `${this._folder}/.vscode/link.json`;
+		this._trace = stopOnEntry;
+
+		// Register as the debug message handler
+		session.setDebugHandler((command, args) => {
+			this.handleMessage([command, args] as RideMessage);
+		});
+
+		// Signal that session is ready (already connected)
+		this.promptType = 1;
+		this._sessionReady.notify();
+
+		// Get link info from existing session
+		await this.getLinkInfo();
+		this.initialiseBreakpoints();
+
+		// If a program was specified, fix and run it
+		if (this._sourceFile) {
+			await this.exec(0, `name←⊃2 ⎕FIX 'file://${this._sourceFile}'`, 1);
+			await this.exec(this._trace ? 1 : 0, '⍎name', 1);
+		} else {
+			// No program - just emit stopOnEntry if requested
+			if (this._trace) {
+				this.emit('stopOnEntry');
+			}
+		}
+	}
+
+	/**
+	 * Detach from the shared session (called when debug session ends).
+	 */
+	public detachFromSession(): void {
+		if (this._session) {
+			this._session.clearDebugHandler();
+			this._session = undefined;
+		}
+		this._attachedToSession = false;
+	}
+
 	private async getLinkInfo() {
 		await this._fileAccessor.deleteFile(this._link).catch(this.err);
 		await this.exec(0, `(⊂⎕JSON ⍕¨¨5177⌶⍬)⎕NPUT '${this._link}' 1`, 1);
@@ -169,6 +220,12 @@ export class AplRuntime extends EventEmitter {
 	 * Stop debug session.
 	 */
 	public async terminate(): Promise<void> {
+		// When attached to shared session, just detach - don't kill the interpreter
+		if (this._attachedToSession) {
+			this.detachFromSession();
+			return;
+		}
+		// Otherwise send Exit to terminate the interpreter
 		return new Promise((resolve, reject) => {
 			this._terminate = { resolve, reject };
 			this.send('Exit', { code: 0 });
@@ -386,6 +443,16 @@ export class AplRuntime extends EventEmitter {
 
 
 	private sendEach(x: Array<string>) {
+		// When attached to session, send through the session
+		if (this._attachedToSession && this._session) {
+			x.forEach((y) => {
+				this.log(`send ${this.trunc(y)}`);
+				const [command, args] = JSON.parse(y);
+				this._session!.sendMessage(command, args);
+			});
+			return;
+		}
+		// Otherwise send directly to client socket
 		if (this._client) {
 			x.forEach((y) => this.log(`send ${this.trunc(y)}`));
 			this._client.write(Buffer.concat(x.map(this.toBuf)));

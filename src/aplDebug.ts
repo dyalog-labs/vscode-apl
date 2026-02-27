@@ -14,6 +14,7 @@ import * as vscode from 'vscode';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import { basename } from 'path-browserify';
 import { AplRuntime, IAplBreakpoint, FileAccessor } from './aplRuntime';
+import { AplSession } from './aplSession';
 import { Subject } from 'await-notify';
 
 // function timeout(ms: number) {
@@ -220,8 +221,15 @@ export class AplDebugSession extends LoggingDebugSession {
 		// wait until configuration has finished (and configurationDoneRequest has been called)
 		await this._configurationDone.wait(1000);
 
-		// start the program in the runtime
-		await this._runtime.start(args.exe, args.dyalogCfg, args.program, args.cwd, !!args.stopOnEntry, !!args.noDebug);
+		// Check if REPL session is already connected
+		const session = AplSession.getInstance();
+		if (session.isConnected) {
+			// Attach to existing REPL session instead of spawning new interpreter
+			await this._runtime.attachToSession(session, args.program, args.cwd, !!args.stopOnEntry);
+		} else {
+			// No REPL session - spawn new interpreter
+			await this._runtime.start(args.exe, args.dyalogCfg, args.program, args.cwd, !!args.stopOnEntry, !!args.noDebug);
+		}
 
 		this.sendResponse(response);
 	}
