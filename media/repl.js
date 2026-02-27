@@ -35,16 +35,26 @@
 	function handleKeyDown(e) {
 		if (e.key === 'Enter' && !e.shiftKey) {
 			e.preventDefault();
+			e.stopPropagation(); // Prevent bubbling to VS Code debug keybindings
 			executeInput();
 		} else if (e.key === 'ArrowUp' && inputEl.selectionStart === 0) {
 			e.preventDefault();
+			e.stopPropagation();
 			navigateHistory(-1);
 		} else if (e.key === 'ArrowDown' && inputEl.selectionStart === inputEl.value.length) {
 			e.preventDefault();
+			e.stopPropagation();
 			navigateHistory(1);
 		} else if (e.key === 'l' && e.ctrlKey) {
 			e.preventDefault();
+			e.stopPropagation();
 			handleClear();
+		} else if (e.key === 'F5' || e.key === 'F10' || e.key === 'F11') {
+			// Let debug keys pass through to VS Code
+			return;
+		} else {
+			// Stop other keys from triggering VS Code commands while typing
+			e.stopPropagation();
 		}
 	}
 
