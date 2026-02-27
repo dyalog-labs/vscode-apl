@@ -236,6 +236,37 @@
         "category": "APL"
       }
     ],
+    "configuration": {
+      "title": "APL",
+      "properties": {
+        "apl.connectionTiming": {
+          "type": "string",
+          "enum": ["onStart", "onDemand", "never"],
+          "default": "onDemand",
+          "enumDescriptions": [
+            "Start Dyalog APL when an APL file is opened",
+            "Start Dyalog APL when the REPL is opened or code is run",
+            "Never auto-start; manually connect to existing RIDE"
+          ],
+          "description": "When to start the Dyalog APL interpreter"
+        },
+        "apl.interpreter.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to dyalog.exe. Leave empty to use 'dyalog.exe' from PATH."
+        },
+        "apl.ride.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Host for connecting to existing RIDE session"
+        },
+        "apl.ride.port": {
+          "type": "number",
+          "default": 4502,
+          "description": "Port for connecting to existing RIDE session"
+        }
+      }
+    },
     "breakpoints": [
       {
         "language": "apl"

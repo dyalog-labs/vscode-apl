@@ -36,8 +36,7 @@ export function activateAplDebug(context: vscode.ExtensionContext, factory?: vsc
 			replProvider.clear();
 		}),
 		vscode.commands.registerCommand('apl.repl.interrupt', () => {
-			// TODO: Phase 2 - Send interrupt to runtime
-			vscode.window.showInformationMessage('Interrupt not yet implemented');
+			replProvider.interrupt();
 		})
 	);
 

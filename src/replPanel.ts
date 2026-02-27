@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { AplSession, ConnectionState } from './aplSession';
 
 /**
  * Provider for the APL REPL webview panel in the bottom panel area.
@@ -10,10 +11,47 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 	private _view?: vscode.WebviewView;
 	private _outputHistory: Array<{ type: string; text: string }> = [];
 	private _inputHistory: string[] = [];
+	private _session: AplSession;
+	private _disposables: vscode.Disposable[] = [];
 
 	constructor(
 		private readonly _extensionUri: vscode.Uri,
-	) { }
+	) {
+		this._session = AplSession.getInstance();
+		this._setupSessionListeners();
+	}
+
+	private _setupSessionListeners(): void {
+		// Listen for session state changes
+		this._session.on('stateChanged', (state: ConnectionState) => {
+			this._updateStatus(state);
+		});
+
+		// Listen for session output
+		this._session.on('output', (text: string, type: string) => {
+			this._appendOutput(type, text);
+		});
+
+		// Listen for echo (input acknowledgement)
+		this._session.on('echo', (_input: string) => {
+			// Input is already shown, echo confirms execution started
+		});
+
+		// Listen for ready event
+		this._session.on('ready', () => {
+			this._appendOutput('system', 'APL session ready.');
+		});
+
+		// Listen for end event
+		this._session.on('end', () => {
+			this._appendOutput('system', 'Session ended.');
+		});
+
+		// Listen for errors
+		this._session.on('error', (error: Error) => {
+			this._appendOutput('error', `Error: ${error.message}`);
+		});
+	}
 
 	public resolveWebviewView(
 		webviewView: vscode.WebviewView,
@@ -39,9 +77,16 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 					return;
 				case 'requestHistory':
 					this._sendHistory();
+					this._updateStatus(this._session.state);
 					return;
 				case 'clear':
 					this._outputHistory = [];
+					return;
+				case 'connect':
+					this._handleConnect();
+					return;
+				case 'interrupt':
+					this._handleInterrupt();
 					return;
 			}
 		});
@@ -50,19 +95,62 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 		webviewView.onDidChangeVisibility(() => {
 			if (webviewView.visible) {
 				this._sendHistory();
+				this._updateStatus(this._session.state);
 			}
 		});
 
-		// Send initial history if we have any
+		// Send initial history and status
 		if (this._outputHistory.length > 0) {
 			this._sendHistory();
+		}
+		this._updateStatus(this._session.state);
+
+		// Auto-connect based on setting
+		this._autoConnect();
+	}
+
+	/**
+	 * Auto-connect based on connectionTiming setting
+	 */
+	private async _autoConnect(): Promise<void> {
+		const config = vscode.workspace.getConfiguration('apl');
+		const timing = config.get<string>('connectionTiming') || 'onDemand';
+
+		if (timing === 'onDemand' && !this._session.isConnected) {
+			await this._handleConnect();
+		}
+	}
+
+	/**
+	 * Handle connect request
+	 */
+	private async _handleConnect(): Promise<void> {
+		if (this._session.isConnected) {
+			return;
+		}
+
+		const config = vscode.workspace.getConfiguration('apl');
+		const timing = config.get<string>('connectionTiming') || 'onDemand';
+
+		try {
+			this._appendOutput('system', 'Connecting to interpreter...');
+
+			if (timing === 'never') {
+				// Connect to existing RIDE
+				await this._session.connect();
+			} else {
+				// Spawn new interpreter
+				await this._session.spawn();
+			}
+		} catch (error: any) {
+			this._appendOutput('error', `Failed to connect: ${error.message}`);
 		}
 	}
 
 	/**
 	 * Handle code execution request from webview
 	 */
-	private _handleExecute(code: string) {
+	private async _handleExecute(code: string): Promise<void> {
 		if (!code.trim()) {
 			return;
 		}
@@ -70,18 +158,43 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 		// Add to input history
 		this._inputHistory.push(code);
 
-		// Echo the input
+		// Echo the input with 6-space indent (like APL session)
 		this._appendOutput('input', `      ${code}`);
 
-		// TODO: Phase 2 - Connect to APL runtime and execute
-		// For now, show a placeholder message
-		this._appendOutput('system', '[REPL not connected - Phase 2 will add interpreter connection]');
+		// Ensure connected
+		if (!this._session.isConnected) {
+			await this._handleConnect();
+			if (!this._session.isConnected) {
+				this._appendOutput('error', '[Not connected to interpreter]');
+				return;
+			}
+		}
+
+		// Execute
+		this._session.execute(code);
+	}
+
+	/**
+	 * Handle interrupt request
+	 */
+	private _handleInterrupt(): void {
+		this._session.interrupt();
+	}
+
+	/**
+	 * Update connection status in webview
+	 */
+	private _updateStatus(state: ConnectionState): void {
+		this._view?.webview.postMessage({
+			command: 'setStatus',
+			status: state
+		});
 	}
 
 	/**
 	 * Append output to history and send to webview
 	 */
-	private _appendOutput(type: string, text: string) {
+	private _appendOutput(type: string, text: string): void {
 		this._outputHistory.push({ type, text });
 		this._view?.webview.postMessage({
 			command: 'appendOutput',
@@ -93,7 +206,7 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 	/**
 	 * Send full output history to webview (used when view becomes visible)
 	 */
-	private _sendHistory() {
+	private _sendHistory(): void {
 		this._view?.webview.postMessage({
 			command: 'setHistory',
 			history: this._outputHistory,
@@ -104,9 +217,37 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 	/**
 	 * Clear the REPL output
 	 */
-	public clear() {
+	public clear(): void {
 		this._outputHistory = [];
 		this._view?.webview.postMessage({ command: 'clear' });
+	}
+
+	/**
+	 * Interrupt execution
+	 */
+	public interrupt(): void {
+		this._session.interrupt();
+	}
+
+	/**
+	 * Disconnect the session
+	 */
+	public disconnect(): void {
+		this._session.disconnect();
+	}
+
+	/**
+	 * Get the session (for sharing with debug adapter)
+	 */
+	public get session(): AplSession {
+		return this._session;
+	}
+
+	/**
+	 * Dispose resources
+	 */
+	public dispose(): void {
+		this._disposables.forEach(d => d.dispose());
 	}
 
 	/**
