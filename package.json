@@ -133,19 +133,19 @@
         {
           "command": "extension.apl-debug.traceBackward",
           "group": "1_debug",
-          "when": "resourceLangId == apl",
+          "when": "debugType == apl",
           "order": 1
         },
         {
           "command": "extension.apl-debug.traceForward",
           "group": "1_debug",
-          "when": "resourceLangId == apl",
+          "when": "debugType == apl",
           "order": 2
         },
         {
           "command": "extension.apl-debug.cutback",
           "group": "1_debug",
-          "when": "resourceLangId == apl",
+          "when": "debugType == apl",
           "order": 3
         }
       ],
