@@ -194,7 +194,7 @@ export class AplRuntime extends EventEmitter {
 
 	private async getLinkInfo() {
 		await this._fileAccessor.deleteFile(this._link).catch(this.err);
-		await this.exec(0, `(⊂⎕JSON ⍕¨¨5177⌶⍬)⎕NPUT '${this._link}' 1`, 1);
+		await this.exec(0, `{}(⊂⎕JSON ⍕¨¨5177⌶⍬)⎕NPUT '${this._link}' 1`, 1);
 		return this._fileAccessor.checkExists(this._link, 5000)
 		.then(() => this._fileAccessor.readFile(this._link))
 		.then((data) => {
