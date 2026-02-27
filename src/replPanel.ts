@@ -82,7 +82,6 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 				if (session.type === 'apl') {
 					this._debugSession = session;
 					this._isDebugMode = true;
-					this._appendOutput('system', `Debug session started: ${session.name}`);
 					this._updateDebugMode(true);
 					// Focus the REPL panel instead of Debug Console
 					this._view?.show(false);
@@ -96,7 +95,6 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 				if (session.type === 'apl' && this._debugSession?.id === session.id) {
 					this._debugSession = undefined;
 					this._isDebugMode = false;
-					this._appendOutput('system', 'Debug session ended.');
 					this._updateDebugMode(false);
 				}
 			})
@@ -205,8 +203,6 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 		const timing = config.get<string>('connectionTiming') || 'onDemand';
 
 		try {
-			this._appendOutput('system', 'Connecting to interpreter...');
-
 			if (timing === 'never') {
 				// Connect to existing RIDE
 				await this._session.connect();
