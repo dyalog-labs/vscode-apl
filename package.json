@@ -330,7 +330,8 @@
             "dyalogCfg": "",
             "program": "${workspaceFolder}/${command:AskForProgramName}",
             "cwd": "${workspaceFolder}",
-            "stopOnEntry": true
+            "stopOnEntry": true,
+            "internalConsoleOptions": "neverOpen"
           }
         ],
         "configurationSnippets": [
@@ -345,7 +346,8 @@
               "dyalogCfg": "",
               "program": "^\"\\${workspaceFolder}/\\${command:AskForProgramName}\"",
               "cwd": "^\"\\${workspaceFolder}\"",
-              "stopOnEntry": true
+              "stopOnEntry": true,
+              "internalConsoleOptions": "neverOpen"
             }
           }
         ],

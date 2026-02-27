@@ -84,6 +84,8 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 					this._isDebugMode = true;
 					this._appendOutput('system', `Debug session started: ${session.name}`);
 					this._updateDebugMode(true);
+					// Focus the REPL panel instead of Debug Console
+					this._view?.show(false);
 				}
 			})
 		);
