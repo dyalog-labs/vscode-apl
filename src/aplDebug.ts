@@ -42,6 +42,8 @@ interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	trace?: boolean;
 	/** run without debugging */
 	noDebug?: boolean;
+	/** Expression to execute with tracing (from REPL Ctrl+Enter) */
+	traceExpression?: string;
 }
 
 export class AplDebugSession extends LoggingDebugSession {
@@ -229,6 +231,11 @@ export class AplDebugSession extends LoggingDebugSession {
 		} else {
 			// No REPL session - spawn new interpreter
 			await this._runtime.start(args.exe, args.dyalogCfg, args.program, args.cwd, !!args.stopOnEntry, !!args.noDebug);
+		}
+
+		// If traceExpression is provided (from REPL Ctrl+Enter), execute it with tracing
+		if (args.traceExpression) {
+			this._runtime.executeWithTrace(args.traceExpression);
 		}
 
 		this.sendResponse(response);
@@ -515,7 +522,11 @@ export class AplDebugSession extends LoggingDebugSession {
 			case 'help':
 				this._runtime.getHelpInformation(args);
 				this.sendResponse(response); break;
-				
+
+			case 'executeWithTrace':
+				this._runtime.executeWithTrace(args.expression);
+				this.sendResponse(response); break;
+
 			default:
 				super.customRequest(command, response, args); break;
 		}

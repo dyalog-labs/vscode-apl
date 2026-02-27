@@ -718,6 +718,13 @@ export class AplRuntime extends EventEmitter {
 		this.exec(0, expr);
 	}
 
+	/**
+	 * Execute expression with tracing enabled (for stepping through)
+	 */
+	public executeWithTrace(expr: string) {
+		this.exec(1, expr);
+	}
+
 	private _autocompletion: any;
 	/**
 	 * Get autocomplete

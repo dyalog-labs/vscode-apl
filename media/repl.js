@@ -33,7 +33,11 @@
 
 	// Handle keyboard input
 	function handleKeyDown(e) {
-		if (e.key === 'Enter' && !e.shiftKey) {
+		if (e.key === 'Enter' && e.ctrlKey) {
+			e.preventDefault();
+			e.stopPropagation();
+			executeWithTrace();
+		} else if (e.key === 'Enter' && !e.shiftKey) {
 			e.preventDefault();
 			e.stopPropagation(); // Prevent bubbling to VS Code debug keybindings
 			executeInput();
@@ -84,6 +88,29 @@
 		// Send to extension
 		vscode.postMessage({
 			command: 'execute',
+			code: code
+		});
+
+		// Clear input
+		inputEl.value = '';
+		inputEl.style.height = 'auto';
+	}
+
+	// Execute with tracing enabled (Ctrl+Enter)
+	function executeWithTrace() {
+		const code = inputEl.value.trim();
+		if (!code) return;
+
+		// Add to history
+		if (inputHistory[inputHistory.length - 1] !== code) {
+			inputHistory.push(code);
+		}
+		historyIndex = -1;
+		currentInput = '';
+
+		// Send to extension with trace flag
+		vscode.postMessage({
+			command: 'executeWithTrace',
 			code: code
 		});
 

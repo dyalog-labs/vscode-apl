@@ -145,6 +145,9 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 				case 'execute':
 					this._handleExecute(message.code);
 					return;
+				case 'executeWithTrace':
+					this._handleExecuteWithTrace(message.code);
+					return;
 				case 'requestHistory':
 					this._sendHistory();
 					this._updateStatus(this._session.state);
@@ -265,6 +268,66 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 
 		// Execute via standalone session
 		this._session.execute(code);
+	}
+
+	/**
+	 * Handle code execution with tracing (Ctrl+Enter)
+	 */
+	private async _handleExecuteWithTrace(code: string): Promise<void> {
+		if (!code.trim()) {
+			return;
+		}
+
+		// Add to input history
+		this._inputHistory.push(code);
+
+		// Echo the input with 6-space indent
+		this._appendOutput('input', `      ${code}`);
+
+		// If already in debug mode, execute with trace via debug session
+		if (this._isDebugMode && this._debugSession) {
+			try {
+				await this._debugSession.customRequest('executeWithTrace', {
+					expression: code
+				});
+			} catch (error: any) {
+				this._appendOutput('error', `Debug execution error: ${error.message}`);
+			}
+			return;
+		}
+
+		// Not in debug mode - start a debug session attached to REPL
+		// Ensure connected first
+		if (!this._session.isConnected) {
+			await this._handleConnect();
+			if (!this._session.isConnected) {
+				this._appendOutput('error', '[Not connected to interpreter]');
+				return;
+			}
+		}
+
+		// Get workspace folder for debug session
+		const workspaceFolders = vscode.workspace.workspaceFolders;
+		const cwd = workspaceFolders?.[0]?.uri.fsPath || '';
+
+		// Start debug session (will attach to existing REPL session)
+		const started = await vscode.debug.startDebugging(
+			workspaceFolders?.[0],
+			{
+				type: 'apl',
+				name: 'Trace Expression',
+				request: 'launch',
+				program: '',  // No program file - just trace expression
+				cwd: cwd,
+				stopOnEntry: false,
+				noDebug: false,
+				traceExpression: code  // Custom: expression to trace
+			}
+		);
+
+		if (!started) {
+			this._appendOutput('error', 'Failed to start debug session');
+		}
 	}
 
 	/**
