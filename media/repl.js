@@ -41,14 +41,14 @@
 			e.preventDefault();
 			e.stopPropagation(); // Prevent bubbling to VS Code debug keybindings
 			executeInput();
-		} else if (e.key === 'ArrowUp' && inputEl.selectionStart === 0) {
-			e.preventDefault();
-			e.stopPropagation();
-			navigateHistory(-1);
-		} else if (e.key === 'ArrowDown' && inputEl.selectionStart === inputEl.value.length) {
+		} else if (e.key === 'ArrowUp') {
 			e.preventDefault();
 			e.stopPropagation();
 			navigateHistory(1);
+		} else if (e.key === 'ArrowDown') {
+			e.preventDefault();
+			e.stopPropagation();
+			navigateHistory(-1);
 		} else if (e.key === 'l' && e.ctrlKey) {
 			e.preventDefault();
 			e.stopPropagation();
@@ -143,7 +143,9 @@
 
 		// Move cursor to end
 		inputEl.selectionStart = inputEl.selectionEnd = inputEl.value.length;
-		handleInput();
+		// Resize textarea without calling handleInput (which resets historyIndex)
+		inputEl.style.height = 'auto';
+		inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + 'px';
 	}
 
 	// Clear output
