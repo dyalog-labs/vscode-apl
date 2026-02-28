@@ -65,6 +65,11 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 				token
 			});
 		});
+
+		// Listen for HTML output
+		this._session.on('showHtml', (args: { title: string; html: string }) => {
+			this._handleShowHtml(args.title, args.html);
+		});
 	}
 
 	private _setupDebugListeners(): void {
@@ -182,6 +187,9 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 					return;
 				case 'valuetip':
 					this._handleValueTip(message.expression);
+					return;
+				case 'navigateToError':
+					this._handleNavigateToError(message.name, message.line);
 					return;
 			}
 		});
@@ -599,6 +607,65 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 		} catch {
 			// Silently ignore hover errors
 		}
+	}
+
+	/**
+	 * Handle click on error location — navigate to source file
+	 */
+	private async _handleNavigateToError(name: string, line: number): Promise<void> {
+		// Extract base name (last component after dots, e.g. #.ns.foo → foo)
+		const baseName = name.includes('.') ? name.split('.').pop()! : name;
+
+		// Search for the function file in workspace
+		const pattern = `**/${baseName}.{aplf,aplo,apln,aplc,aplci}`;
+		const files = await vscode.workspace.findFiles(pattern, '**/node_modules/**', 5);
+
+		if (files.length > 0) {
+			// If multiple matches and name has namespace path, prefer matching path
+			let targetFile = files[0];
+			if (files.length > 1 && name.includes('.')) {
+				const nsParts = name.split('.');
+				nsParts.pop();
+				const nsPath = nsParts.join('/').replace('#', '');
+				const match = files.find(f => f.fsPath.replace(/\\/g, '/').includes(nsPath));
+				if (match) { targetFile = match; }
+			}
+
+			const doc = await vscode.workspace.openTextDocument(targetFile);
+			const editor = await vscode.window.showTextDocument(doc, {
+				preview: true,
+				preserveFocus: false
+			});
+
+			// APL line numbers map directly to file line numbers (0-indexed)
+			const targetLine = Math.min(line, doc.lineCount - 1);
+			const position = new vscode.Position(targetLine, 0);
+			editor.selection = new vscode.Selection(position, position);
+			editor.revealRange(
+				new vscode.Range(position, position),
+				vscode.TextEditorRevealType.InCenter
+			);
+		} else {
+			vscode.window.showWarningMessage(`Could not find source for: ${name}`);
+		}
+	}
+
+	/**
+	 * Handle ShowHTML from interpreter — open in separate webview panel
+	 */
+	private _handleShowHtml(title: string, html: string): void {
+		// Notify REPL output
+		this._appendOutput('system', `HTML output: ${title}`);
+		this._view?.webview.postMessage({ command: 'showHtml', title });
+
+		// Open in a separate webview panel
+		const panel = vscode.window.createWebviewPanel(
+			'aplHtmlOutput',
+			title || 'APL HTML Output',
+			{ viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
+			{ enableScripts: true }
+		);
+		panel.webview.html = html;
 	}
 
 	/**

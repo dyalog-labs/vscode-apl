@@ -110,7 +110,7 @@ body {
 /* Output area */
 #output {
 	flex: 1;
-	overflow-y: auto;
+	overflow: auto;
 	padding: 8px;
 	font-family: inherit;
 	white-space: pre-wrap;
@@ -120,6 +120,11 @@ body {
 .output-line {
 	line-height: 1.4;
 	padding: 1px 0;
+}
+
+/* Results use pre to preserve array alignment; overflow scrolls horizontally */
+.output-line.result {
+	white-space: pre;
 }
 
 .output-line.input {
@@ -137,6 +142,29 @@ body {
 .output-line.system {
 	color: var(--output-system);
 	font-style: italic;
+}
+
+/* Syntax highlighting tokens */
+.apl-number {
+	color: var(--vscode-debugTokenExpression-number, #b5cea8);
+}
+
+.apl-error-type {
+	color: var(--vscode-errorForeground);
+}
+
+.apl-location {
+	color: var(--vscode-textLink-foreground);
+	cursor: pointer;
+	text-decoration: underline;
+}
+
+.apl-location:hover {
+	color: var(--vscode-textLink-activeForeground);
+}
+
+.apl-caret {
+	font-weight: bold;
 }
 
 /* Input area */

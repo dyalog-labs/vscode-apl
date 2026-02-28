@@ -31,6 +31,18 @@
 		clearBtn.addEventListener('click', handleClear);
 		interruptBtn.addEventListener('click', handleInterrupt);
 
+		// Set up clickable error locations
+		outputEl.addEventListener('click', function(e) {
+			var location = e.target.closest('.apl-location');
+			if (location) {
+				vscode.postMessage({
+					command: 'navigateToError',
+					name: location.getAttribute('data-name'),
+					line: parseInt(location.getAttribute('data-line'), 10)
+				});
+			}
+		});
+
 		// Set up value tips on output
 		setupValueTips();
 
@@ -201,11 +213,68 @@
 		vscode.postMessage({ command: 'interrupt' });
 	}
 
+	// --- Output highlighting helpers ---
+
+	function escapeHtml(text) {
+		return text
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&#039;');
+	}
+
+	function highlightResult(html) {
+		// Highlight APL numbers (space-bounded or at line boundaries)
+		// Handles: ¯ prefix, decimals, exponents (E), complex (J)
+		return html.replace(
+			/(^|\s)(¯?\d+\.?\d*(?:[Ee]¯?\d+)?(?:[Jj]¯?\d+\.?\d*(?:[Ee]¯?\d+)?)?)(?=\s|$)/gm,
+			'$1<span class="apl-number">$2</span>'
+		);
+	}
+
+	function highlightError(html) {
+		// Highlight error type names (e.g., VALUE ERROR, SYNTAX ERROR)
+		var result = html.replace(
+			/^([A-Z][A-Z ]* ERROR.*)/gm,
+			'<span class="apl-error-type">$1</span>'
+		);
+
+		// Make function[line] references clickable
+		result = result.replace(
+			/([A-Za-z_\u237a\u2375\u2206\u2359\u2395#][A-Za-z0-9_\u237a\u2375\u2206\u2359\u2395#.]*)\[(\d+)\]/g,
+			'<a class="apl-location" data-name="$1" data-line="$2" title="Go to $1 line $2">$1[$2]</a>'
+		);
+
+		// Highlight caret indicator lines
+		result = result.replace(
+			/^(\s*\^+\s*)$/gm,
+			'<span class="apl-caret">$1</span>'
+		);
+
+		return result;
+	}
+
 	// Append a line to output
 	function appendOutput(type, text) {
 		const line = document.createElement('div');
 		line.className = 'output-line ' + type;
-		line.textContent = text;
+
+		if (type === 'error') {
+			line.innerHTML = highlightError(escapeHtml(text));
+		} else if (type === 'result') {
+			// Error messages often arrive as 'result' via AppendSessionOutput;
+			// detect and apply error highlighting when patterns match
+			const escaped = escapeHtml(text);
+			if (/^[A-Z][A-Z ]* ERROR/m.test(text) || /\[\d+\]/.test(text)) {
+				line.innerHTML = highlightError(escaped);
+			} else {
+				line.innerHTML = highlightResult(escaped);
+			}
+		} else {
+			line.textContent = text;
+		}
+
 		outputEl.appendChild(line);
 
 		// Auto-scroll to bottom
@@ -348,12 +417,13 @@
 	function setupValueTips() {
 		outputEl.addEventListener('mouseover', function(e) {
 			const target = e.target;
-			if (!target || !target.classList.contains('output-line')) return;
+			const outputLine = target.closest ? target.closest('.output-line') : null;
+			if (!outputLine) return;
 			clearTimeout(tipTimeout);
 			tipTimeout = setTimeout(function() {
 				// Get word under mouse from text content
-				const text = target.textContent || '';
-				const rect = target.getBoundingClientRect();
+				const text = outputLine.textContent || '';
+				const rect = outputLine.getBoundingClientRect();
 				const x = e.clientX - rect.left;
 				// Approximate character position (monospace)
 				const charWidth = rect.width / (text.length || 1);
@@ -440,6 +510,10 @@
 
 			case 'valuetip':
 				showValueTip(message.expression, message.value);
+				break;
+
+			case 'showHtml':
+				appendOutput('system', 'HTML output: ' + (message.title || 'Untitled'));
 				break;
 		}
 	});
