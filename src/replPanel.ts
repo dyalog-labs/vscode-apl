@@ -666,10 +666,14 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 			let targetFile = files[0];
 			if (files.length > 1 && name.includes('.')) {
 				const nsParts = name.split('.');
-				nsParts.pop();
-				const nsPath = nsParts.join('/').replace('#', '');
-				const match = files.find(f => f.fsPath.replace(/\\/g, '/').includes(nsPath));
-				if (match) { targetFile = match; }
+				nsParts.pop(); // remove function name
+				// Filter out root namespace '#' and build expected directory suffix
+				const nsDirs = nsParts.filter(p => p !== '#');
+				if (nsDirs.length > 0) {
+					const suffix = '/' + nsDirs.join('/') + '/' + baseName + '.';
+					const match = files.find(f => f.fsPath.replace(/\\/g, '/').includes(suffix));
+					if (match) { targetFile = match; }
+				}
 			}
 
 			const doc = await vscode.workspace.openTextDocument(targetFile);
