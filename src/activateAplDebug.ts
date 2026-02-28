@@ -24,7 +24,8 @@ export function activateAplDebug(context: vscode.ExtensionContext, factory?: vsc
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(ReplViewProvider.viewType, replProvider, {
 			webviewOptions: { retainContextWhenHidden: true }
-		})
+		}),
+		replProvider
 	);
 
 	// Register REPL commands

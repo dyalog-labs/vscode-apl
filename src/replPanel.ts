@@ -745,6 +745,7 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 	 * Dispose resources
 	 */
 	public dispose(): void {
+		this._session.disconnect();
 		this._disposables.forEach(d => d.dispose());
 	}
 
