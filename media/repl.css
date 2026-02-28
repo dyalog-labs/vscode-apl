@@ -192,3 +192,56 @@ body {
 #output::-webkit-scrollbar-thumb:hover {
 	background: var(--vscode-scrollbarSlider-hoverBackground);
 }
+
+/* Autocomplete dropdown */
+.autocomplete-dropdown {
+	position: absolute;
+	bottom: 100%;
+	left: 24px;
+	max-height: 200px;
+	overflow-y: auto;
+	background: var(--vscode-editorSuggestWidget-background, var(--input-bg));
+	border: 1px solid var(--vscode-editorSuggestWidget-border, var(--input-border));
+	border-radius: 3px;
+	z-index: 100;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.autocomplete-item {
+	padding: 4px 8px;
+	cursor: pointer;
+	font-family: inherit;
+	font-size: inherit;
+	white-space: nowrap;
+}
+
+.autocomplete-item:hover,
+.autocomplete-item.selected {
+	background: var(--vscode-editorSuggestWidget-selectedBackground, var(--button-hover));
+	color: var(--vscode-editorSuggestWidget-selectedForeground, var(--repl-fg));
+}
+
+/* Input area needs relative position for dropdown */
+#input-area {
+	position: relative;
+}
+
+/* Value tip tooltip */
+.value-tip {
+	position: fixed;
+	padding: 4px 8px;
+	background: var(--vscode-editorHoverWidget-background, var(--input-bg));
+	border: 1px solid var(--vscode-editorHoverWidget-border, var(--input-border));
+	border-radius: 3px;
+	font-family: inherit;
+	font-size: 12px;
+	max-width: 400px;
+	max-height: 200px;
+	overflow: auto;
+	white-space: pre-wrap;
+	z-index: 200;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+	pointer-events: none;
+	bottom: 40px;
+	left: 8px;
+}

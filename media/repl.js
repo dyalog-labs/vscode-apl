@@ -15,6 +15,10 @@
 	let inputHistory = [];
 	let historyIndex = -1;
 	let currentInput = '';
+	let autocompleteToken = 0;
+	let autocompleteDropdown = null;
+	let autocompleteIndex = -1;
+	let autocompleteOptions = [];
 
 	// Initialize
 	function init() {
@@ -27,12 +31,40 @@
 		clearBtn.addEventListener('click', handleClear);
 		interruptBtn.addEventListener('click', handleInterrupt);
 
+		// Set up value tips on output
+		setupValueTips();
+
 		// Focus input
 		inputEl.focus();
 	}
 
 	// Handle keyboard input
 	function handleKeyDown(e) {
+		// When autocomplete dropdown is open, intercept navigation keys
+		if (autocompleteDropdown) {
+			if (e.key === 'ArrowUp') {
+				e.preventDefault();
+				e.stopPropagation();
+				navigateAutocomplete(-1);
+				return;
+			} else if (e.key === 'ArrowDown') {
+				e.preventDefault();
+				e.stopPropagation();
+				navigateAutocomplete(1);
+				return;
+			} else if (e.key === 'Enter') {
+				e.preventDefault();
+				e.stopPropagation();
+				acceptAutocomplete();
+				return;
+			} else if (e.key === 'Escape') {
+				e.preventDefault();
+				e.stopPropagation();
+				dismissAutocomplete();
+				return;
+			}
+		}
+
 		if (e.key === 'Enter' && e.ctrlKey) {
 			e.preventDefault();
 			e.stopPropagation();
@@ -49,6 +81,13 @@
 			e.preventDefault();
 			e.stopPropagation();
 			navigateHistory(-1);
+		} else if (e.key === 'Tab') {
+			e.preventDefault();
+			e.stopPropagation();
+			requestAutocomplete();
+		} else if (e.key === 'Escape') {
+			e.stopPropagation();
+			dismissAutocomplete();
 		} else if (e.key === 'l' && e.ctrlKey) {
 			e.preventDefault();
 			e.stopPropagation();
@@ -71,6 +110,9 @@
 		if (historyIndex !== -1) {
 			historyIndex = -1;
 		}
+
+		// Dismiss autocomplete on input change
+		dismissAutocomplete();
 	}
 
 	// Execute the current input
@@ -185,6 +227,174 @@
 		}
 	}
 
+	// --- Autocomplete ---
+
+	function requestAutocomplete() {
+		const line = inputEl.value;
+		const pos = inputEl.selectionStart;
+		if (!line.trim()) return;
+		autocompleteToken++;
+		vscode.postMessage({
+			command: 'autocomplete',
+			line: line,
+			pos: pos,
+			token: autocompleteToken
+		});
+	}
+
+	function showAutocomplete(options) {
+		dismissAutocomplete();
+		if (!options || options.length === 0) return;
+
+		// If single option, insert it directly
+		if (options.length === 1) {
+			insertCompletion(options[0]);
+			return;
+		}
+
+		// Find common prefix and insert it
+		const prefix = commonPrefix(options);
+		if (prefix.length > 0) {
+			insertCompletion(prefix);
+		}
+
+		// Store options for keyboard navigation
+		autocompleteOptions = options;
+		autocompleteIndex = -1;
+
+		// Show dropdown for remaining choices
+		autocompleteDropdown = document.createElement('div');
+		autocompleteDropdown.className = 'autocomplete-dropdown';
+		options.forEach(function(opt) {
+			const item = document.createElement('div');
+			item.className = 'autocomplete-item';
+			item.textContent = opt;
+			item.addEventListener('mousedown', function(e) {
+				e.preventDefault();
+				insertCompletion(opt);
+				dismissAutocomplete();
+			});
+			autocompleteDropdown.appendChild(item);
+		});
+		document.getElementById('input-area').appendChild(autocompleteDropdown);
+	}
+
+	function navigateAutocomplete(direction) {
+		if (!autocompleteDropdown || autocompleteOptions.length === 0) return;
+		const items = autocompleteDropdown.querySelectorAll('.autocomplete-item');
+
+		// Remove previous highlight
+		if (autocompleteIndex >= 0 && autocompleteIndex < items.length) {
+			items[autocompleteIndex].classList.remove('selected');
+		}
+
+		// Update index with wrapping
+		autocompleteIndex += direction;
+		if (autocompleteIndex < 0) autocompleteIndex = items.length - 1;
+		if (autocompleteIndex >= items.length) autocompleteIndex = 0;
+
+		// Highlight new item and scroll into view
+		items[autocompleteIndex].classList.add('selected');
+		items[autocompleteIndex].scrollIntoView({ block: 'nearest' });
+	}
+
+	function acceptAutocomplete() {
+		if (autocompleteIndex >= 0 && autocompleteIndex < autocompleteOptions.length) {
+			insertCompletion(autocompleteOptions[autocompleteIndex]);
+		}
+		dismissAutocomplete();
+	}
+
+	function insertCompletion(text) {
+		const pos = inputEl.selectionStart;
+		const value = inputEl.value;
+		// Find the start of the current token (word boundary)
+		let start = pos;
+		while (start > 0 && /[A-Za-z0-9_⍺⍵∆⍙⎕#.]/.test(value[start - 1])) {
+			start--;
+		}
+		inputEl.value = value.slice(0, start) + text + value.slice(pos);
+		const newPos = start + text.length;
+		inputEl.selectionStart = inputEl.selectionEnd = newPos;
+		handleInput();
+	}
+
+	function dismissAutocomplete() {
+		if (autocompleteDropdown) {
+			autocompleteDropdown.remove();
+			autocompleteDropdown = null;
+		}
+		autocompleteIndex = -1;
+		autocompleteOptions = [];
+	}
+
+	function commonPrefix(arr) {
+		if (arr.length === 0) return '';
+		let prefix = arr[0];
+		for (let i = 1; i < arr.length; i++) {
+			while (arr[i].indexOf(prefix) !== 0) {
+				prefix = prefix.slice(0, -1);
+				if (!prefix) return '';
+			}
+		}
+		return prefix;
+	}
+
+	// --- Value Tips (Hover on output) ---
+
+	let tipEl = null;
+	let tipTimeout = null;
+
+	function setupValueTips() {
+		outputEl.addEventListener('mouseover', function(e) {
+			const target = e.target;
+			if (!target || !target.classList.contains('output-line')) return;
+			clearTimeout(tipTimeout);
+			tipTimeout = setTimeout(function() {
+				// Get word under mouse from text content
+				const text = target.textContent || '';
+				const rect = target.getBoundingClientRect();
+				const x = e.clientX - rect.left;
+				// Approximate character position (monospace)
+				const charWidth = rect.width / (text.length || 1);
+				const charPos = Math.floor(x / charWidth);
+				const word = getWordAt(text, charPos);
+				if (word && /^[A-Za-z_⍺⍵∆⍙⎕#][A-Za-z0-9_⍺⍵∆⍙⎕#.]*$/.test(word)) {
+					vscode.postMessage({ command: 'valuetip', expression: word });
+				}
+			}, 500);
+		});
+
+		outputEl.addEventListener('mouseout', function() {
+			clearTimeout(tipTimeout);
+			dismissTip();
+		});
+	}
+
+	function getWordAt(text, pos) {
+		if (pos < 0 || pos >= text.length) return '';
+		let start = pos;
+		let end = pos;
+		while (start > 0 && /[A-Za-z0-9_⍺⍵∆⍙⎕#.]/.test(text[start - 1])) start--;
+		while (end < text.length && /[A-Za-z0-9_⍺⍵∆⍙⎕#.]/.test(text[end])) end++;
+		return text.slice(start, end);
+	}
+
+	function showValueTip(expression, value) {
+		dismissTip();
+		tipEl = document.createElement('div');
+		tipEl.className = 'value-tip';
+		tipEl.textContent = expression + ' → ' + value;
+		document.getElementById('repl-container').appendChild(tipEl);
+	}
+
+	function dismissTip() {
+		if (tipEl) {
+			tipEl.remove();
+			tipEl = null;
+		}
+	}
+
 	// Handle messages from extension
 	window.addEventListener('message', event => {
 		const message = event.data;
@@ -222,6 +432,14 @@
 
 			case 'setDebugMode':
 				setDebugMode(message.isDebug);
+				break;
+
+			case 'autocomplete':
+				showAutocomplete(message.options);
+				break;
+
+			case 'valuetip':
+				showValueTip(message.expression, message.value);
 				break;
 		}
 	});

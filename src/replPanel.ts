@@ -15,10 +15,17 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 	private _disposables: vscode.Disposable[] = [];
 	private _debugSession?: vscode.DebugSession;
 	private _isDebugMode = false;
+	private _context: vscode.ExtensionContext;
+
+	private static readonly HISTORY_KEY = 'apl.repl.inputHistory';
+	private static readonly MAX_HISTORY = 500;
 
 	constructor(
 		private readonly _extensionUri: vscode.Uri,
+		context: vscode.ExtensionContext,
 	) {
+		this._context = context;
+		this._inputHistory = context.globalState.get<string[]>(ReplViewProvider.HISTORY_KEY, []);
 		this._session = AplSession.getInstance();
 		this._setupSessionListeners();
 		this._setupDebugListeners();
@@ -48,6 +55,15 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 		// Listen for errors
 		this._session.on('error', (error: Error) => {
 			this._appendOutput('error', `Error: ${error.message}`);
+		});
+
+		// Listen for autocomplete results
+		this._session.on('autocomplete', (options: string[], token: number) => {
+			this._view?.webview.postMessage({
+				command: 'autocomplete',
+				options,
+				token
+			});
 		});
 	}
 
@@ -161,6 +177,12 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 				case 'interrupt':
 					this._handleInterrupt();
 					return;
+				case 'autocomplete':
+					this._handleAutocomplete(message.line, message.pos, message.token);
+					return;
+				case 'valuetip':
+					this._handleValueTip(message.expression);
+					return;
 			}
 		});
 
@@ -231,8 +253,9 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 			return;
 		}
 
-		// Add to input history
+		// Add to input history and persist
 		this._inputHistory.push(code);
+		this._saveInputHistory();
 
 		// Echo the input with 6-space indent (like APL session)
 		this._appendOutput('input', `      ${code}`);
@@ -278,8 +301,9 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 			return;
 		}
 
-		// Add to input history
+		// Add to input history and persist
 		this._inputHistory.push(code);
+		this._saveInputHistory();
 
 		// Echo the input with 6-space indent
 		this._appendOutput('input', `      ${code}`);
@@ -544,6 +568,40 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	/**
+	 * Handle autocomplete request from webview
+	 */
+	private _handleAutocomplete(line: string, pos: number, token: number): void {
+		if (this._session.isConnected) {
+			this._session.getAutocomplete(line, pos, token);
+		}
+	}
+
+	/**
+	 * Handle value tip request from webview
+	 */
+	private async _handleValueTip(expression: string): Promise<void> {
+		if (!expression) return;
+		// Value tips only available in debug mode (safe evaluate with hover context)
+		if (!this._isDebugMode || !this._debugSession) return;
+
+		try {
+			const response = await this._debugSession.customRequest('evaluate', {
+				expression,
+				context: 'hover'
+			});
+			if (response?.result) {
+				this._view?.webview.postMessage({
+					command: 'valuetip',
+					expression,
+					value: response.result
+				});
+			}
+		} catch {
+			// Silently ignore hover errors
+		}
+	}
+
+	/**
 	 * Update connection status in webview
 	 */
 	private _updateStatus(state: ConnectionState): void {
@@ -574,6 +632,17 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 			history: this._outputHistory,
 			inputHistory: this._inputHistory
 		});
+	}
+
+	/**
+	 * Persist input history to globalState
+	 */
+	private _saveInputHistory(): void {
+		// Trim to max size
+		if (this._inputHistory.length > ReplViewProvider.MAX_HISTORY) {
+			this._inputHistory = this._inputHistory.slice(-ReplViewProvider.MAX_HISTORY);
+		}
+		this._context.globalState.update(ReplViewProvider.HISTORY_KEY, this._inputHistory);
 	}
 
 	/**

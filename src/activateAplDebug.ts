@@ -20,7 +20,7 @@ export function activateAplDebug(context: vscode.ExtensionContext, factory?: vsc
 	// aplStatusBarItem.command = myCommandId;
 
 	// Register the REPL view provider for bottom panel
-	const replProvider = new ReplViewProvider(context.extensionUri);
+	const replProvider = new ReplViewProvider(context.extensionUri, context);
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(ReplViewProvider.viewType, replProvider, {
 			webviewOptions: { retainContextWhenHidden: true }
