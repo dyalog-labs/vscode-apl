@@ -4,6 +4,7 @@
 
 import { EventEmitter } from 'events';
 import * as cp from 'child_process';
+import * as fs from 'fs';
 import * as Path from 'path';
 import * as Net from 'net';
 import { Subject } from 'await-notify';
@@ -199,6 +200,10 @@ export class AplRuntime extends EventEmitter {
 	}
 
 	private async getLinkInfo() {
+		const linkDir = Path.dirname(this._link);
+		if (!fs.existsSync(linkDir)) {
+			fs.mkdirSync(linkDir, { recursive: true });
+		}
 		await this._fileAccessor.deleteFile(this._link).catch(this.err);
 		await this.exec(0, `{}(⊂⎕JSON ⍕¨¨5177⌶⍬)⎕NPUT '${this._link}' 1`, 1);
 		return this._fileAccessor.checkExists(this._link, 5000)
