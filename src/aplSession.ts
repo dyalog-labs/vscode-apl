@@ -63,6 +63,10 @@ export class AplSession extends EventEmitter {
 	// Debug handler for delegating debug-specific messages
 	private _debugHandler?: (command: string, args: any) => void;
 
+	// Pending debug messages buffered when no debug handler is attached
+	private _pendingDebugMessages: Array<[string, any]> = [];
+	private _isSuspended = false;
+
 	public static getInstance(): AplSession {
 		if (!AplSession._instance) {
 			AplSession._instance = new AplSession();
@@ -102,6 +106,34 @@ export class AplSession extends EventEmitter {
 	 */
 	public get hasDebugHandler(): boolean {
 		return this._debugHandler !== undefined;
+	}
+
+	/**
+	 * Check if the interpreter is in a suspended state (untrapped error).
+	 */
+	public get isSuspended(): boolean {
+		return this._isSuspended;
+	}
+
+	/**
+	 * Number of buffered debug messages waiting for replay.
+	 */
+	public get pendingDebugMessageCount(): number {
+		return this._pendingDebugMessages.length;
+	}
+
+	/**
+	 * Replay buffered debug messages through the debug handler.
+	 * Called after a debug session attaches to handle a suspended state.
+	 */
+	public replayPendingMessages(): void {
+		if (!this._debugHandler) {
+			return;
+		}
+		const messages = this._pendingDebugMessages.splice(0);
+		for (const [command, args] of messages) {
+			this._debugHandler(command, args);
+		}
 	}
 
 	/**
@@ -253,6 +285,8 @@ export class AplSession extends EventEmitter {
 			this._server.close();
 			this._server = undefined;
 		}
+		this._pendingDebugMessages = [];
+		this._isSuspended = false;
 		this.setState('disconnected');
 	}
 
@@ -428,7 +462,34 @@ export class AplSession extends EventEmitter {
 				break;
 
 			case 'HadError':
-				// Error occurred
+				if (!this._debugHandler) {
+					this._pendingDebugMessages.push([command, args]);
+				}
+				break;
+
+			case 'OpenWindow':
+			case 'UpdateWindow':
+			case 'GotoWindow':
+				if (!this._debugHandler) {
+					this._pendingDebugMessages.push([command, args]);
+				}
+				break;
+
+			case 'SetHighlightLine':
+				if (!this._debugHandler) {
+					this._pendingDebugMessages.push([command, args]);
+					this._isSuspended = true;
+					this.emit('suspended');
+				}
+				break;
+
+			case 'CloseWindow':
+				if (!this._debugHandler) {
+					if (this._pendingDebugMessages.length > 0) {
+						this._pendingDebugMessages.push([command, args]);
+					}
+					this._isSuspended = false;
+				}
 				break;
 
 			case 'StatusOutput':

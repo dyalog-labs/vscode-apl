@@ -44,6 +44,8 @@ interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	noDebug?: boolean;
 	/** Expression to execute with tracing (from REPL Ctrl+Enter) */
 	traceExpression?: string;
+	/** Flag indicating the debug session should attach to an already-suspended REPL */
+	replSuspended?: boolean;
 }
 
 export class AplDebugSession extends LoggingDebugSession {
@@ -226,8 +228,13 @@ export class AplDebugSession extends LoggingDebugSession {
 		// Check if REPL session is already connected
 		const session = AplSession.getInstance();
 		if (session.isConnected) {
-			// Attach to existing REPL session instead of spawning new interpreter
-			await this._runtime.attachToSession(session, args.program, args.cwd, !!args.stopOnEntry, !!args.noDebug);
+			if (args.replSuspended) {
+				// Attach to already-suspended session (auto-debug on error)
+				await this._runtime.attachToSuspendedSession(session, args.cwd);
+			} else {
+				// Attach to existing REPL session instead of spawning new interpreter
+				await this._runtime.attachToSession(session, args.program, args.cwd, !!args.stopOnEntry, !!args.noDebug);
+			}
 		} else {
 			// No REPL session - spawn new interpreter
 			await this._runtime.start(args.exe, args.dyalogCfg, args.program, args.cwd, !!args.stopOnEntry, !!args.noDebug);

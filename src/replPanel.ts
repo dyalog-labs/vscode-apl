@@ -70,6 +70,11 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 		this._session.on('showHtml', (args: { title: string; html: string }) => {
 			this._handleShowHtml(args.title, args.html);
 		});
+
+		// Listen for interpreter suspension (untrapped error in standalone mode)
+		this._session.on('suspended', () => {
+			this._handleAutoDebug();
+		});
 	}
 
 	private _setupDebugListeners(): void {
@@ -359,6 +364,42 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 
 		if (!started) {
 			this._appendOutput('error', 'Failed to start debug session');
+		}
+	}
+
+	/**
+	 * Auto-start debug session when interpreter enters suspended state
+	 * due to an untrapped error in standalone mode.
+	 */
+	private async _handleAutoDebug(): Promise<void> {
+		// Don't auto-debug if already in debug mode
+		if (this._isDebugMode) {
+			return;
+		}
+
+		if (!this._session.isConnected) {
+			return;
+		}
+
+		const workspaceFolders = vscode.workspace.workspaceFolders;
+		const cwd = workspaceFolders?.[0]?.uri.fsPath || '';
+
+		const started = await vscode.debug.startDebugging(
+			workspaceFolders?.[0],
+			{
+				type: 'apl',
+				name: 'Error Debug',
+				request: 'launch',
+				program: '',
+				cwd: cwd,
+				stopOnEntry: false,
+				noDebug: false,
+				replSuspended: true
+			}
+		);
+
+		if (!started) {
+			this._appendOutput('system', 'Auto-debug: failed to start debug session');
 		}
 	}
 

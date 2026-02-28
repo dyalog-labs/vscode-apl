@@ -86,6 +86,7 @@ export class AplRuntime extends EventEmitter {
 	private _client?: Net.Socket;
 	private _session?: AplSession;  // Shared session when attached to REPL
 	private _attachedToSession = false;  // Flag to indicate if using shared session
+	private _autoDebug = false;  // True when debug session was auto-started on error
 
 	private _exe = 'dyalog.exe';
 	private _dyalogCfg: string | undefined;
@@ -197,6 +198,52 @@ export class AplRuntime extends EventEmitter {
 			this._session = undefined;
 		}
 		this._attachedToSession = false;
+		this._autoDebug = false;
+	}
+
+	/**
+	 * Attach to an AplSession that is already in a suspended state due to an untrapped error.
+	 * Registers as the debug handler, gets link info, then replays buffered messages
+	 * so the debugger renders the suspended state.
+	 */
+	public async attachToSuspendedSession(session: AplSession, folder: string): Promise<void> {
+		this._session = session;
+		this._attachedToSession = true;
+		this._autoDebug = true;
+		this._noDebug = false;
+		this._sourceFile = '';
+		this._folder = folder;
+		this._link = `${this._folder}/.vscode/link.json`;
+		this._trace = false;
+
+		this.log(`attachToSuspendedSession: isSuspended=${session.isSuspended}, pendingCount=${session.pendingDebugMessageCount}`);
+
+		// Register as the debug message handler
+		session.setDebugHandler((command, args) => {
+			this.handleMessage([command, args] as RideMessage);
+		});
+
+		// Signal that session is ready (already connected and suspended)
+		this.promptType = 1;
+		this._sessionReady.notify();
+
+		// Check if still suspended (user might have resolved it already)
+		if (!session.isSuspended) {
+			this.log('attachToSuspendedSession: no longer suspended, aborting');
+			this.detachFromSession();
+			this.sendEvent('end');
+			return;
+		}
+
+		// Get link info from existing session (interpreter can execute while suspended)
+		this.log('attachToSuspendedSession: getting link info...');
+		await this.getLinkInfo();
+
+		this.log(`attachToSuspendedSession: replaying ${session.pendingDebugMessageCount} buffered messages`);
+		// Replay the buffered messages (OpenWindow, HadError, SetHighlightLine)
+		// This triggers openWindow() -> sets _winId, setHighlightLine() -> emits stopOnStep
+		session.replayPendingMessages();
+		this.log(`attachToSuspendedSession: done, _winId=${this._winId}`);
 	}
 
 	private async getLinkInfo() {
@@ -238,6 +285,7 @@ export class AplRuntime extends EventEmitter {
 	public async terminate(): Promise<void> {
 		// When attached to shared session, just detach - don't kill the interpreter
 		if (this._attachedToSession) {
+			this._autoDebug = false;
 			this.detachFromSession();
 			return;
 		}
@@ -629,9 +677,21 @@ export class AplRuntime extends EventEmitter {
 	}
 	private closeWindow(x: CloseWindowMessage) {
 		const win = this._windows[x.win];
+		if (!win) return;
 		const filename = Path.resolve(win.filename);
 		delete this._windows[x.win];
 		this.sendEvent('closeWindow', { filename });
+
+		// Auto-terminate: if this was an auto-debug session and all tracer windows are closed,
+		// the suspension has been resolved (user continued, reset, or cut back)
+		if (this._autoDebug && !this._hasOpenWindows()) {
+			this._autoDebug = false;
+			this.sendEvent('end');
+		}
+	}
+
+	private _hasOpenWindows(): boolean {
+		return Object.keys(this._windows).length > 0;
 	}
 	private openWindow(x: OpenWindowMessage) {
 		this._windows[x.token] = x;
