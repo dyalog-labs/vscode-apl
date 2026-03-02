@@ -640,17 +640,29 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 		const files = await vscode.workspace.findFiles(pattern, '**/node_modules/**', 5);
 
 		if (files.length > 0) {
-			// If multiple matches and name has namespace path, prefer matching path
 			let targetFile = files[0];
-			if (files.length > 1 && name.includes('.')) {
-				const nsParts = name.split('.');
-				nsParts.pop(); // remove function name
-				// Filter out root namespace '#' and build expected directory suffix
-				const nsDirs = nsParts.filter(p => p !== '#');
-				if (nsDirs.length > 0) {
-					const suffix = '/' + nsDirs.join('/') + '/' + baseName + '.';
-					const match = files.find(f => f.fsPath.replace(/\\/g, '/').includes(suffix));
-					if (match) { targetFile = match; }
+			if (files.length > 1) {
+				let matched = false;
+				// If name has namespace path (e.g. #.utils.test), match against directory structure
+				if (name.includes('.')) {
+					const nsParts = name.split('.');
+					nsParts.pop(); // remove function name
+					const nsDirs = nsParts.filter(p => p !== '#');
+					if (nsDirs.length > 0) {
+						const suffix = '/' + nsDirs.join('/') + '/' + baseName + '.';
+						const match = files.find(f => f.fsPath.replace(/\\/g, '/').includes(suffix));
+						if (match) { targetFile = match; matched = true; }
+					}
+				}
+				// No namespace dirs (root namespace #.func) or bare name (func):
+				// prefer the shallowest file — APL Link maps directory depth to namespace depth,
+				// so a root-namespace function lives at the workspace root level.
+				if (!matched) {
+					targetFile = files.reduce((best, f) => {
+						const bestDepth = vscode.workspace.asRelativePath(best, false).split(/[/\\]/).length;
+						const fDepth = vscode.workspace.asRelativePath(f, false).split(/[/\\]/).length;
+						return fDepth < bestDepth ? f : best;
+					});
 				}
 			}
 
