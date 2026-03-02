@@ -102,8 +102,8 @@ body {
 	cursor: not-allowed;
 }
 
-/* Push buttons to the right */
-#toolbar button:first-of-type {
+/* Push Clear and Interrupt to the right; Connect stays near status */
+#clear-btn {
 	margin-left: auto;
 }
 

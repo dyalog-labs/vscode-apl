@@ -8,6 +8,7 @@
 	const outputEl = document.getElementById('output');
 	const inputEl = document.getElementById('input');
 	const statusEl = document.getElementById('status');
+	const connectBtn = document.getElementById('connect-btn');
 	const clearBtn = document.getElementById('clear-btn');
 	const interruptBtn = document.getElementById('interrupt-btn');
 
@@ -28,6 +29,7 @@
 		// Set up event listeners
 		inputEl.addEventListener('keydown', handleKeyDown);
 		inputEl.addEventListener('input', handleInput);
+		connectBtn.addEventListener('click', handleConnect);
 		clearBtn.addEventListener('click', handleClear);
 		interruptBtn.addEventListener('click', handleInterrupt);
 
@@ -202,6 +204,11 @@
 		inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + 'px';
 	}
 
+	// Connect to interpreter
+	function handleConnect() {
+		vscode.postMessage({ command: 'connect' });
+	}
+
 	// Clear output
 	function handleClear() {
 		outputEl.innerHTML = '';
@@ -285,6 +292,7 @@
 	function setStatus(status) {
 		statusEl.textContent = status.charAt(0).toUpperCase() + status.slice(1);
 		statusEl.className = status;
+		connectBtn.disabled = status !== 'disconnected';
 		interruptBtn.disabled = status !== 'busy';
 	}
 

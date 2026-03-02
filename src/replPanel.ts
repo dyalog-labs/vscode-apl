@@ -216,22 +216,7 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 		// Send initial debug mode state
 		this._updateDebugMode(this._isDebugMode);
 
-		// Auto-connect based on setting (only if not debugging)
-		if (!this._isDebugMode) {
-			this._autoConnect();
-		}
-	}
-
-	/**
-	 * Auto-connect based on connectionTiming setting
-	 */
-	private async _autoConnect(): Promise<void> {
-		const config = vscode.workspace.getConfiguration('apl');
-		const timing = config.get<string>('connectionTiming') || 'onDemand';
-
-		if (timing === 'onDemand' && !this._session.isConnected) {
-			await this._handleConnect();
-		}
+		// No auto-connect — the user clicks the Connect button when ready
 	}
 
 	/**
@@ -293,13 +278,10 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 			return;
 		}
 
-		// Standalone mode: ensure connected to AplSession
+		// Standalone mode: must be connected
 		if (!this._session.isConnected) {
-			await this._handleConnect();
-			if (!this._session.isConnected) {
-				this._appendOutput('error', '[Not connected to interpreter]');
-				return;
-			}
+			this._appendOutput('error', '[Not connected — click Connect to start an interpreter]');
+			return;
 		}
 
 		// Execute via standalone session
@@ -334,13 +316,9 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		// Not in debug mode - start a debug session attached to REPL
-		// Ensure connected first
 		if (!this._session.isConnected) {
-			await this._handleConnect();
-			if (!this._session.isConnected) {
-				this._appendOutput('error', '[Not connected to interpreter]');
-				return;
-			}
+			this._appendOutput('error', '[Not connected — click Connect to start an interpreter]');
+			return;
 		}
 
 		// Get workspace folder for debug session
@@ -821,6 +799,7 @@ export class ReplViewProvider implements vscode.WebviewViewProvider {
 		<div id="toolbar">
 			<span id="status" class="disconnected">Disconnected</span>
 			<span id="debug-indicator">DEBUG</span>
+			<button id="connect-btn" title="Connect to interpreter">Connect</button>
 			<button id="clear-btn" title="Clear output">Clear</button>
 			<button id="interrupt-btn" title="Interrupt execution" disabled>Interrupt</button>
 		</div>
