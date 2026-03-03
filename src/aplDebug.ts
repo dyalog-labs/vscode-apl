@@ -60,6 +60,7 @@ export class AplDebugSession extends LoggingDebugSession {
 	private _toolTipSeq: number = 100000;
 
 	private _configurationDone = new Subject();
+	private _saveWatcher?: vscode.Disposable;
 
 	private _cancelationTokens = new Map<number, boolean>();
 
@@ -245,14 +246,21 @@ export class AplDebugSession extends LoggingDebugSession {
 			this._runtime.executeWithTrace(args.traceExpression);
 		}
 
+		// Watch for file saves to sync changes to tracer (edit-and-continue)
+		this._saveWatcher = vscode.workspace.onDidSaveTextDocument((doc) => {
+			this._runtime.syncFileToTracer(doc.uri.fsPath);
+		});
+
 		this.sendResponse(response);
 	}
 	protected async disconnectRequest(response: DebugProtocol.DisconnectResponse, args: DebugProtocol.DisconnectArguments, request?: DebugProtocol.Request) {
+		this._saveWatcher?.dispose();
 		await this._runtime.terminate();
 		this.sendResponse(response);
 	}
 
 	protected async terminateRequest(response: DebugProtocol.TerminateResponse, args: DebugProtocol.TerminateArguments, request?: DebugProtocol.Request) {
+		this._saveWatcher?.dispose();
 		await this._runtime.terminate();
 		this.sendResponse(response);
 	}

@@ -660,6 +660,9 @@ export class AplRuntime extends EventEmitter {
 		}
 	}
 	private setHighlightLine(x: SetHighlightLineMessage) {
+		if (this._windows[x.win]) {
+			this._windows[x.win].currentRow = x.line;
+		}
 		if (this._hadError === 1001) {
 			this.sendEvent('stopOnBreakpoint');
 			this._hadError = 0;
@@ -673,7 +676,11 @@ export class AplRuntime extends EventEmitter {
 		this._windows[x.token] = x;
 	}
 	private replySaveChanges(x: ReplySaveChangesMessage) {
-		// const w = ide.wins[x.win]; w && w.saved(x.err); 
+		if (x.err) {
+			this.log(`SaveChanges failed for win ${x.win}: error ${x.err}`);
+		} else {
+			this.log(`SaveChanges succeeded for win ${x.win}`);
+		}
 	}
 	private closeWindow(x: CloseWindowMessage) {
 		const win = this._windows[x.win];
@@ -888,6 +895,104 @@ export class AplRuntime extends EventEmitter {
 	 */
 	public stepOut() {
 		this.send('ContinueTrace', { win: this._winId });
+	}
+
+	/**
+	 * Sync file changes to any open tracer window for that file.
+	 * Sends SaveChanges via RIDE protocol to update the suspended function
+	 * in the interpreter, enabling "edit and continue" during debugging.
+	 */
+	public syncFileToTracer(filePath: string): void {
+		const normalizedPath = this.normPath(Path.resolve(filePath));
+
+		for (const token of Object.keys(this._windows)) {
+			const win = this._windows[+token];
+			if (!win?.filename) continue;
+
+			if (this.normPath(Path.resolve(win.filename)) !== normalizedPath) continue;
+
+			try {
+				let content = fs.readFileSync(filePath, 'utf-8');
+				// Strip BOM if present
+				if (content.charCodeAt(0) === 0xFEFF) {
+					content = content.slice(1);
+				}
+				const lines = content.split(/\r?\n/);
+				// Remove trailing empty line from final newline
+				if (lines.length > 0 && lines[lines.length - 1] === '') {
+					lines.pop();
+				}
+
+				let text: string[];
+				const hasNabla = lines.some(l => /^\s*∇/.test(l));
+
+				if (!hasNabla) {
+					// Single-function file (.aplf) - entire file is the function
+					text = lines;
+				} else {
+					// Multi-function file (.apln, .aplc) - extract function between ∇ boundaries
+					let startIdx = -1;
+					// Try _linkInfo first for accurate start line
+					const linkRow = this._linkInfo.find(row =>
+						this.normPath(row.filePath) === normalizedPath &&
+						(row.aplName.endsWith(`.${win.name}`) || row.aplName === win.name)
+					);
+					if (linkRow) {
+						startIdx = linkRow.startLine;
+					} else {
+						// Fallback: search for ∇ line containing the function name
+						startIdx = lines.findIndex(l => {
+							const m = l.match(/^\s*∇\s*(.*)/);
+							return m && m[1].includes(win.name);
+						});
+					}
+					if (startIdx === -1) continue;
+
+					// Extract header from the ∇ line (strip leading whitespace and ∇)
+					const header = lines[startIdx].replace(/^\s*∇\s*/, '');
+					// Find the closing ∇
+					let endIdx = startIdx + 1;
+					while (endIdx < lines.length && !/^\s*∇\s*$/.test(lines[endIdx])) {
+						endIdx++;
+					}
+					text = [header, ...lines.slice(startIdx + 1, endIdx)];
+				}
+
+				// Calculate line shift to adjust the interpreter's execution pointer
+				const oldRow = win.currentRow ?? 0;
+				let delta = 0;
+				if (win.text && oldRow < win.text.length) {
+					const tracedContent = win.text[oldRow];
+					const lineDelta = text.length - win.text.length;
+					if (lineDelta !== 0 && oldRow + lineDelta >= 0 && oldRow + lineDelta < text.length && text[oldRow + lineDelta] === tracedContent) {
+						delta = lineDelta;
+					}
+				}
+
+				this.log(`syncFileToTracer: sending SaveChanges for win ${token} (${win.name}), line delta ${delta}`);
+				this.send('SaveChanges', {
+					win: +token,
+					text,
+					stop: win.stop || [],
+					trace: win.trace || [],
+					monitor: win.monitor || [],
+				});
+				win.text = text;
+
+				// Move the execution pointer to follow the traced line
+				if (delta > 0) {
+					for (let i = 0; i < delta; i++) {
+						this.send('TraceForward', { win: +token });
+					}
+				} else if (delta < 0) {
+					for (let i = 0; i < -delta; i++) {
+						this.send('TraceBackward', { win: +token });
+					}
+				}
+			} catch (e) {
+				this.log(`syncFileToTracer error: ${e}`);
+			}
+		}
 	}
 
 	/**
