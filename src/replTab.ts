@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { AplSession, ConnectionState } from './aplSession';
 import { ReplManager } from './replManager';
+import { ReplBreakpointSync } from './replBreakpointSync';
 
 /**
  * A single REPL tab: owns an AplSession and accumulates output history.
@@ -18,6 +19,7 @@ export class ReplTab implements vscode.Disposable {
 	private _disposables: vscode.Disposable[] = [];
 	private _debugSession?: vscode.DebugSession;
 	private _isDebugMode = false;
+	private _breakpointSync = new ReplBreakpointSync();
 
 	/** Set by the view provider when this tab is active; undefined when background. */
 	private _postMessage?: (message: any) => void;
@@ -70,6 +72,13 @@ export class ReplTab implements vscode.Disposable {
 			this._postMessage?.({ command: 'setStatus', status: state });
 		});
 
+		this._session.on('ready', () => {
+			const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath.replace(/\\/g, '/');
+			if (folder) {
+				this._breakpointSync.attachToSession(this._session, folder);
+			}
+		});
+
 		this._session.on('output', (text: string, type: string) => {
 			this._appendOutput(type, text);
 		});
@@ -79,6 +88,7 @@ export class ReplTab implements vscode.Disposable {
 		});
 
 		this._session.on('end', () => {
+			this._breakpointSync.detachFromSession();
 			this._appendOutput('system', 'Session ended.');
 		});
 
@@ -582,6 +592,9 @@ export class ReplTab implements vscode.Disposable {
 		} else {
 			this._appendOutput('error', 'Not connected to interpreter.');
 		}
+
+		// Refresh breakpoint sync link info after linking
+		this._breakpointSync.refreshLinkInfo();
 	}
 
 	private _handleShowHtml(title: string, html: string): void {
@@ -598,6 +611,7 @@ export class ReplTab implements vscode.Disposable {
 	}
 
 	public dispose(): void {
+		this._breakpointSync.dispose();
 		this._session.disconnect();
 		this._disposables.forEach(d => d.dispose());
 		this._disposables = [];
