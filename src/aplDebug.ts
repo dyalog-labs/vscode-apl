@@ -14,7 +14,7 @@ import * as vscode from 'vscode';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import { basename } from 'path-browserify';
 import { AplRuntime, IAplBreakpoint, FileAccessor } from './aplRuntime';
-import { AplSession } from './aplSession';
+import { ReplManager } from './replManager';
 import { Subject } from 'await-notify';
 
 // function timeout(ms: number) {
@@ -46,6 +46,8 @@ interface ILaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	traceExpression?: string;
 	/** Flag indicating the debug session should attach to an already-suspended REPL */
 	replSuspended?: boolean;
+	/** ID of the REPL tab whose session to attach to */
+	replId?: string;
 }
 
 export class AplDebugSession extends LoggingDebugSession {
@@ -226,9 +228,12 @@ export class AplDebugSession extends LoggingDebugSession {
 		// wait until configuration has finished (and configurationDoneRequest has been called)
 		await this._configurationDone.wait(1000);
 
-		// Check if REPL session is already connected
-		const session = AplSession.getInstance();
-		if (session.isConnected) {
+		// Check if a REPL session is already connected
+		const manager = ReplManager.getInstance();
+		const session = args.replId
+			? manager.getTab(args.replId)?.session
+			: manager.activeSession;
+		if (session?.isConnected) {
 			if (args.replSuspended) {
 				// Attach to already-suspended session (auto-debug on error)
 				await this._runtime.attachToSuspendedSession(session, args.cwd);

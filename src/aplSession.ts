@@ -48,8 +48,6 @@ export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'bus
  * Can be used by both the REPL panel and debug sessions.
  */
 export class AplSession extends EventEmitter {
-	private static _instance: AplSession | undefined;
-
 	private _client?: Net.Socket;
 	private _child?: cp.ChildProcess;
 	private _server?: Net.Server;
@@ -67,14 +65,7 @@ export class AplSession extends EventEmitter {
 	private _pendingDebugMessages: Array<[string, any]> = [];
 	private _isSuspended = false;
 
-	public static getInstance(): AplSession {
-		if (!AplSession._instance) {
-			AplSession._instance = new AplSession();
-		}
-		return AplSession._instance;
-	}
-
-	private constructor() {
+	public constructor() {
 		super();
 	}
 

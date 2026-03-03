@@ -11,6 +11,8 @@
 	const connectBtn = document.getElementById('connect-btn');
 	const clearBtn = document.getElementById('clear-btn');
 	const interruptBtn = document.getElementById('interrupt-btn');
+	const tabListEl = document.getElementById('tab-list');
+	const newTabBtn = document.getElementById('new-tab-btn');
 
 	// State
 	let inputHistory = [];
@@ -23,8 +25,8 @@
 
 	// Initialize
 	function init() {
-		// Request history from extension
-		vscode.postMessage({ command: 'requestHistory' });
+		// Notify extension that the webview is ready
+		vscode.postMessage({ command: 'ready' });
 
 		// Set up event listeners
 		inputEl.addEventListener('keydown', handleKeyDown);
@@ -32,6 +34,7 @@
 		connectBtn.addEventListener('click', handleConnect);
 		clearBtn.addEventListener('click', handleClear);
 		interruptBtn.addEventListener('click', handleInterrupt);
+		newTabBtn.addEventListener('click', handleNewTab);
 
 		// Set up clickable error locations
 		outputEl.addEventListener('click', function(e) {
@@ -50,6 +53,44 @@
 
 		// Focus input
 		inputEl.focus();
+	}
+
+	// --- Tab bar ---
+
+	function handleNewTab() {
+		vscode.postMessage({ command: 'newTab' });
+	}
+
+	function renderTabs(tabs) {
+		tabListEl.innerHTML = '';
+		tabs.forEach(function(tab) {
+			var tabEl = document.createElement('div');
+			tabEl.className = 'tab' + (tab.isActive ? ' active' : '');
+			tabEl.setAttribute('data-tab-id', tab.replId);
+
+			var labelEl = document.createElement('span');
+			labelEl.className = 'tab-label';
+			labelEl.textContent = tab.label;
+			labelEl.addEventListener('click', function() {
+				vscode.postMessage({ command: 'switchTab', tabId: tab.replId });
+			});
+			tabEl.appendChild(labelEl);
+
+			// Close button (only show if more than one tab)
+			if (tabs.length > 1) {
+				var closeEl = document.createElement('span');
+				closeEl.className = 'tab-close';
+				closeEl.textContent = '\u00d7';
+				closeEl.title = 'Close';
+				closeEl.addEventListener('click', function(e) {
+					e.stopPropagation();
+					vscode.postMessage({ command: 'closeTab', tabId: tab.replId });
+				});
+				tabEl.appendChild(closeEl);
+			}
+
+			tabListEl.appendChild(tabEl);
+		});
 	}
 
 	// Handle keyboard input
@@ -522,6 +563,10 @@
 
 			case 'showHtml':
 				appendOutput('system', 'HTML output: ' + (message.title || 'Untitled'));
+				break;
+
+			case 'setTabs':
+				renderTabs(message.tabs);
 				break;
 		}
 	});

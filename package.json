@@ -68,6 +68,8 @@
     "onDebugResolve:apl",
     "onDebugDynamicConfigurations:apl",
     "onCommand:extension.apl-debug.getProgramName",
+    "onCommand:apl.focusRepl",
+    "onCommand:apl.newRepl",
     "onView:aplRepl"
   ],
   "workspaceTrust": {
@@ -222,7 +224,12 @@
       },
       {
         "command": "apl.focusRepl",
-        "title": "Focus APL REPL",
+        "title": "Open APL REPL",
+        "category": "APL"
+      },
+      {
+        "command": "apl.newRepl",
+        "title": "New APL REPL",
         "category": "APL"
       },
       {
@@ -317,6 +324,10 @@
                 "type": "boolean",
                 "description": "Enable logging of the Debug Adapter Protocol.",
                 "default": true
+              },
+              "replId": {
+                "type": "string",
+                "description": "Internal: ID of the REPL tab to attach to."
               }
             }
           }

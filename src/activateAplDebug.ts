@@ -8,6 +8,7 @@ import * as vscode from 'vscode';
 import { WorkspaceFolder, DebugConfiguration, ProviderResult, CancellationToken } from 'vscode';
 import { AplDebugSession } from './aplDebug';
 import { FileAccessor } from './aplRuntime';
+import { ReplManager } from './replManager';
 import { ReplViewProvider } from './replPanel';
 
 let aplStatusBarItem: vscode.StatusBarItem;
@@ -19,8 +20,13 @@ export function activateAplDebug(context: vscode.ExtensionContext, factory?: vsc
 	aplStatusBarItem.show();
 	// aplStatusBarItem.command = myCommandId;
 
+	// Initialize the REPL manager (multi-tab REPL support)
+	const replManager = ReplManager.getInstance();
+	replManager.initialize(context);
+	context.subscriptions.push(replManager);
+
 	// Register the REPL view provider for bottom panel
-	const replProvider = new ReplViewProvider(context.extensionUri, context);
+	const replProvider = new ReplViewProvider(context.extensionUri, replManager);
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(ReplViewProvider.viewType, replProvider, {
 			webviewOptions: { retainContextWhenHidden: true }
@@ -31,13 +37,22 @@ export function activateAplDebug(context: vscode.ExtensionContext, factory?: vsc
 	// Register REPL commands
 	context.subscriptions.push(
 		vscode.commands.registerCommand('apl.focusRepl', () => {
+			// Focus the panel, then ensure a tab exists
+			vscode.commands.executeCommand('aplRepl.focus');
+			if (!replManager.hasTabs) {
+				replManager.createTab();
+			}
+		}),
+		vscode.commands.registerCommand('apl.newRepl', () => {
+			replManager.createTab();
+			// Also focus the panel so the user sees the new tab
 			vscode.commands.executeCommand('aplRepl.focus');
 		}),
 		vscode.commands.registerCommand('apl.repl.clear', () => {
-			replProvider.clear();
+			replManager.clearActiveTab();
 		}),
 		vscode.commands.registerCommand('apl.repl.interrupt', () => {
-			replProvider.interrupt();
+			replManager.interruptActiveTab();
 		})
 	);
 
