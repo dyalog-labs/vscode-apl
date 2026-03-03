@@ -1113,11 +1113,12 @@ export class AplRuntime extends EventEmitter {
 	public clearBreakpoints(path: string): void {
 		const filePath = this.normPath(path);
 		this._breakPoints.delete(filePath);
-		const aplName = this._linkMap[filePath];
-		if (aplName) {
-			this.exec(0, `{}⍬ ⎕STOP '${aplName}'`);
+		// Clear stops on ALL functions in this file, not just one
+		for (const row of this._linkInfo) {
+			if (this.normPath(row.filePath) === filePath) {
+				this.exec(0, `{}⍬ ⎕STOP '${row.aplName}'`);
+			}
 		}
-
 	}
 
 	/*

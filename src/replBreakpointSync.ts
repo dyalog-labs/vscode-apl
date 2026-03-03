@@ -180,7 +180,6 @@ export class ReplBreakpointSync implements vscode.Disposable {
 	}
 
 	private async _onBreakpointsChanged(e: vscode.BreakpointsChangeEvent): Promise<void> {
-		if (this._debugSessionActive) { return; }
 		if (!this._session?.isConnected) { return; }
 
 		if (!this._linkInfoLoaded) {
