@@ -10,6 +10,7 @@ import { AplDebugSession } from './aplDebug';
 import { FileAccessor } from './aplRuntime';
 import { ReplManager } from './replManager';
 import { ReplViewProvider } from './replPanel';
+import { AplBacktickHandler } from './aplBacktick';
 
 let aplStatusBarItem: vscode.StatusBarItem;
 
@@ -33,6 +34,9 @@ export function activateAplDebug(context: vscode.ExtensionContext, factory?: vsc
 		}),
 		replProvider
 	);
+
+	// Register APL backtick input handler for editor-side APL files
+	context.subscriptions.push(new AplBacktickHandler());
 
 	// Register REPL commands
 	context.subscriptions.push(

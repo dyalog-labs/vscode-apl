@@ -23,6 +23,11 @@
 	let autocompleteIndex = -1;
 	let autocompleteOptions = [];
 
+	// Backtick prefix mode state
+	let prefixMode = false;
+	let aplKeyMap = null;       // Map: key -> {char, name, category}
+	let aplKeyEntries = null;   // Array of all entries (for language bar)
+
 	// Initialize
 	function init() {
 		// Notify extension that the webview is ready
@@ -142,6 +147,47 @@
 
 	// Handle keyboard input
 	function handleKeyDown(e) {
+		// --- Backtick prefix mode handling ---
+		if (prefixMode) {
+			// Ignore modifier-only keys (Shift, Ctrl, Alt, Meta) — wait for the actual character
+			if (e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt' || e.key === 'Meta') {
+				return;
+			}
+
+			e.preventDefault();
+			e.stopPropagation();
+
+			if (e.key === 'Escape') {
+				setPrefixMode(false);
+				return;
+			}
+
+			if (e.key === ' ') {
+				// Backtick + space -> literal backtick
+				insertAtCursor('`');
+				setPrefixMode(false);
+				return;
+			}
+
+			// Look up the APL character (includes ` -> ⋄)
+			if (aplKeyMap) {
+				var entry = aplKeyMap.get(e.key);
+				if (entry) {
+					insertAtCursor(entry.char);
+				}
+			}
+			setPrefixMode(false);
+			return;
+		}
+
+		// Detect backtick press to enter prefix mode
+		if (e.key === '`' && !e.ctrlKey && !e.altKey && !e.metaKey && aplKeyMap) {
+			e.preventDefault();
+			e.stopPropagation();
+			setPrefixMode(true);
+			return;
+		}
+
 		// When autocomplete dropdown is open, intercept navigation keys
 		if (autocompleteDropdown) {
 			if (e.key === 'ArrowUp') {
@@ -493,6 +539,134 @@
 		autocompleteOptions = [];
 	}
 
+	// --- Backtick prefix mode helpers ---
+
+	function insertAtCursor(text) {
+		var start = inputEl.selectionStart;
+		var end = inputEl.selectionEnd;
+		var value = inputEl.value;
+		inputEl.value = value.slice(0, start) + text + value.slice(end);
+		var newPos = start + text.length;
+		inputEl.selectionStart = inputEl.selectionEnd = newPos;
+		handleInput();
+	}
+
+	function setPrefixMode(active) {
+		prefixMode = active;
+		var inputArea = document.getElementById('input-area');
+		if (active) {
+			inputArea.classList.add('prefix-mode');
+		} else {
+			inputArea.classList.remove('prefix-mode');
+		}
+	}
+
+	// --- Language bar ---
+
+	function renderLanguageBar() {
+		var existing = document.getElementById('language-bar');
+		if (existing) existing.remove();
+
+		if (!aplKeyEntries || aplKeyEntries.length === 0) return;
+
+		var bar = document.createElement('div');
+		bar.id = 'language-bar';
+
+		// Toggle button
+		var toggle = document.createElement('button');
+		toggle.id = 'langbar-toggle';
+		toggle.textContent = 'APL';
+		toggle.title = 'Toggle APL character bar';
+		toggle.addEventListener('click', function() {
+			var content = document.getElementById('langbar-content');
+			var isHidden = content.style.display === 'none';
+			content.style.display = isHidden ? 'flex' : 'none';
+			toggle.classList.toggle('collapsed', !isHidden);
+			vscode.setState(Object.assign(vscode.getState() || {}, { languageBarOpen: isHidden }));
+		});
+		bar.appendChild(toggle);
+
+		// Character grid
+		var content = document.createElement('div');
+		content.id = 'langbar-content';
+
+		// Characters to hide from bar
+		var hideFromBar = { '\u236B': true, '\u2359': true }; // ⍫ Del Tilde, ⍙ Delta Underbar
+
+		// Extra characters to add at the end (useful APL chars available on keyboard)
+		var extras = [
+			{ char: '\u22C4', name: 'Diamond', key: '`' },
+			{ char: '+', name: 'Plus', key: null },
+			{ char: '@', name: 'At', key: null },
+			{ char: '/', name: 'Slash', key: null },
+			{ char: '\\', name: 'Backslash', key: null },
+			{ char: ',', name: 'Comma', key: null },
+			{ char: '.', name: 'Dot', key: null },
+			{ char: '&', name: 'Ampersand', key: null },
+		];
+
+		// Collect unique characters (avoid duplicates from shift variants)
+		var seen = {};
+		var categoryOrder = ['arithmetic','comparison','logical','structural',
+			'selection','assignment','flow','io','other'];
+		var categories = {};
+
+		aplKeyEntries.forEach(function(entry) {
+			if (entry.key === '`') return;
+			if (seen[entry.char]) return;
+			if (hideFromBar[entry.char]) return;
+			seen[entry.char] = true;
+			if (!categories[entry.category]) categories[entry.category] = [];
+			categories[entry.category].push(entry);
+		});
+
+		categoryOrder.forEach(function(cat) {
+			var entries = categories[cat];
+			if (!entries || entries.length === 0) return;
+
+			entries.forEach(function(entry) {
+				var btn = document.createElement('button');
+				btn.className = 'langbar-char';
+				btn.textContent = entry.char;
+				btn.title = entry.name + ' (`' + entry.key + ')';
+				btn.addEventListener('click', function() {
+					insertAtCursor(entry.char);
+					inputEl.focus();
+				});
+				content.appendChild(btn);
+			});
+		});
+
+		// Append extra characters
+		extras.forEach(function(extra) {
+			if (seen[extra.char]) return;
+			var btn = document.createElement('button');
+			btn.className = 'langbar-char';
+			btn.textContent = extra.char;
+			btn.title = extra.name + (extra.key ? ' (`' + extra.key + ')' : '');
+			btn.addEventListener('click', function() {
+				insertAtCursor(extra.char);
+				inputEl.focus();
+			});
+			content.appendChild(btn);
+		});
+
+		// Restore collapsed state
+		var state = vscode.getState();
+		if (state && state.languageBarOpen === false) {
+			content.style.display = 'none';
+			toggle.classList.add('collapsed');
+		} else {
+			content.style.display = 'flex';
+		}
+
+		bar.appendChild(content);
+
+		// Insert before the input-area
+		var inputArea = document.getElementById('input-area');
+		inputArea.parentNode.insertBefore(bar, inputArea);
+	}
+
 	function commonPrefix(arr) {
 		if (arr.length === 0) return '';
 		let prefix = arr[0];
@@ -614,6 +788,21 @@
 
 			case 'setTabs':
 				renderTabs(message.tabs);
+				break;
+
+			case 'setAplKeys':
+				aplKeyEntries = message.keys;
+				aplKeyMap = new Map();
+				if (message.backtickEnabled !== false) {
+					aplKeyEntries.forEach(function(entry) {
+						aplKeyMap.set(entry.key, entry);
+					});
+				} else {
+					aplKeyMap = null;
+				}
+				if (message.languageBarEnabled !== false) {
+					renderLanguageBar();
+				}
 				break;
 		}
 	});

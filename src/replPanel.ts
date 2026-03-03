@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { ReplManager } from './replManager';
+import { getAplKeysForWebview } from './aplKeys';
 
 /**
  * WebviewViewProvider for the APL REPL panel (bottom panel area).
@@ -135,6 +136,15 @@ export class ReplViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
 		const webview = this._view.webview;
 		const tab = this._manager.activeTab;
+
+		// Send APL key mapping for backtick input and language bar
+		const config = vscode.workspace.getConfiguration('apl');
+		webview.postMessage({
+			command: 'setAplKeys',
+			keys: getAplKeysForWebview(),
+			backtickEnabled: config.get<boolean>('backtickInput', true),
+			languageBarEnabled: config.get<boolean>('languageBar', true)
+		});
 
 		// Send tab list
 		webview.postMessage({
