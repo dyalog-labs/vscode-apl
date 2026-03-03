@@ -64,6 +64,9 @@ export class ReplViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 				case 'closeTab':
 					this._manager.closeTab(message.tabId);
 					return;
+				case 'reorderTab':
+					this._manager.reorderTab(message.tabId, message.targetId, message.before);
+					return;
 
 				// --- REPL actions (delegated to active tab) ---
 				case 'execute':

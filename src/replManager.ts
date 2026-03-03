@@ -16,7 +16,6 @@ export class ReplManager implements vscode.Disposable {
 	private _tabs: Map<string, ReplTab> = new Map();
 	private _tabOrder: string[] = [];
 	private _activeTabId: string | undefined;
-	private _counter = 0;
 	private _context!: vscode.ExtensionContext;
 
 	// Shared input history (persisted in globalState)
@@ -49,11 +48,25 @@ export class ReplManager implements vscode.Disposable {
 		this._onTabsChanged = cb;
 	}
 
+	/** Find the lowest available REPL number (reuses gaps from closed tabs). */
+	private _nextReplNumber(): number {
+		const usedNumbers = new Set<number>();
+		for (const tab of this._tabs.values()) {
+			const match = tab.label.match(/^REPL (\d+)$/);
+			if (match) {
+				usedNumbers.add(parseInt(match[1], 10));
+			}
+		}
+		let n = 1;
+		while (usedNumbers.has(n)) { n++; }
+		return n;
+	}
+
 	/** Create a new REPL tab. Returns the replId. */
 	public createTab(): string {
-		this._counter++;
-		const replId = `repl-${this._counter}-${Date.now()}`;
-		const label = `REPL ${this._counter}`;
+		const num = this._nextReplNumber();
+		const replId = `repl-${num}-${Date.now()}`;
+		const label = `REPL ${num}`;
 
 		const session = new AplSession();
 		const tab = new ReplTab(replId, label, session, this);
@@ -81,6 +94,22 @@ export class ReplManager implements vscode.Disposable {
 				? this._tabOrder[this._tabOrder.length - 1]
 				: undefined;
 		}
+
+		this._onTabsChanged?.();
+	}
+
+	/** Move a tab next to another tab (before or after). */
+	public reorderTab(tabId: string, targetId: string, before: boolean): void {
+		const fromIdx = this._tabOrder.indexOf(tabId);
+		const toIdx = this._tabOrder.indexOf(targetId);
+		if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
+
+		// Remove from old position
+		this._tabOrder.splice(fromIdx, 1);
+		// Find target's new index (shifted after removal)
+		let insertIdx = this._tabOrder.indexOf(targetId);
+		if (!before) { insertIdx++; }
+		this._tabOrder.splice(insertIdx, 0, tabId);
 
 		this._onTabsChanged?.();
 	}

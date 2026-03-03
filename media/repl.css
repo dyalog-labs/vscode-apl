@@ -82,6 +82,18 @@ body {
 	pointer-events: none;
 }
 
+.tab.dragging {
+	opacity: 0.4;
+}
+
+.tab.drop-before {
+	box-shadow: inset 2px 0 0 var(--vscode-focusBorder);
+}
+
+.tab.drop-after {
+	box-shadow: inset -2px 0 0 var(--vscode-focusBorder);
+}
+
 .tab-close {
 	margin-left: 6px;
 	font-size: 14px;

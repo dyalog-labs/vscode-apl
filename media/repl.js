@@ -61,20 +61,67 @@
 		vscode.postMessage({ command: 'newTab' });
 	}
 
+	var dragState = null; // { tabId, startX, el }
+
 	function renderTabs(tabs) {
 		tabListEl.innerHTML = '';
 		tabs.forEach(function(tab) {
 			var tabEl = document.createElement('div');
 			tabEl.className = 'tab' + (tab.isActive ? ' active' : '');
 			tabEl.setAttribute('data-tab-id', tab.replId);
+			tabEl.draggable = true;
 
 			var labelEl = document.createElement('span');
 			labelEl.className = 'tab-label';
 			labelEl.textContent = tab.label;
-			labelEl.addEventListener('click', function() {
+			tabEl.appendChild(labelEl);
+
+			// Click on the tab div itself to switch (label has pointer-events:none in CSS)
+			tabEl.addEventListener('click', function() {
 				vscode.postMessage({ command: 'switchTab', tabId: tab.replId });
 			});
-			tabEl.appendChild(labelEl);
+
+			// --- Drag-and-drop reordering ---
+			tabEl.addEventListener('dragstart', function(e) {
+				dragState = { tabId: tab.replId };
+				tabEl.classList.add('dragging');
+				e.dataTransfer.effectAllowed = 'move';
+				e.dataTransfer.setData('text/plain', tab.replId);
+			});
+			tabEl.addEventListener('dragend', function() {
+				tabEl.classList.remove('dragging');
+				dragState = null;
+				// Remove all drop indicators
+				tabListEl.querySelectorAll('.tab').forEach(function(t) {
+					t.classList.remove('drop-before', 'drop-after');
+				});
+			});
+			tabEl.addEventListener('dragover', function(e) {
+				if (!dragState || dragState.tabId === tab.replId) return;
+				e.preventDefault();
+				e.dataTransfer.dropEffect = 'move';
+				var rect = tabEl.getBoundingClientRect();
+				var midX = rect.left + rect.width / 2;
+				tabEl.classList.toggle('drop-before', e.clientX < midX);
+				tabEl.classList.toggle('drop-after', e.clientX >= midX);
+			});
+			tabEl.addEventListener('dragleave', function() {
+				tabEl.classList.remove('drop-before', 'drop-after');
+			});
+			tabEl.addEventListener('drop', function(e) {
+				e.preventDefault();
+				tabEl.classList.remove('drop-before', 'drop-after');
+				if (!dragState || dragState.tabId === tab.replId) return;
+				var rect = tabEl.getBoundingClientRect();
+				var midX = rect.left + rect.width / 2;
+				var before = e.clientX < midX;
+				vscode.postMessage({
+					command: 'reorderTab',
+					tabId: dragState.tabId,
+					targetId: tab.replId,
+					before: before
+				});
+			});
 
 			// Close button (only show if more than one tab)
 			if (tabs.length > 1) {
