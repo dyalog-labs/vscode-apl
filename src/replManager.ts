@@ -52,7 +52,7 @@ export class ReplManager implements vscode.Disposable {
 	private _nextReplNumber(): number {
 		const usedNumbers = new Set<number>();
 		for (const tab of this._tabs.values()) {
-			const match = tab.label.match(/^REPL (\d+)$/);
+			const match = tab.label.match(/^Session (\d+)$/);
 			if (match) {
 				usedNumbers.add(parseInt(match[1], 10));
 			}
@@ -66,7 +66,7 @@ export class ReplManager implements vscode.Disposable {
 	public createTab(): string {
 		const num = this._nextReplNumber();
 		const replId = `repl-${num}-${Date.now()}`;
-		const label = `REPL ${num}`;
+		const label = `Session ${num}`;
 
 		const session = new AplSession();
 		const tab = new ReplTab(replId, label, session, this);

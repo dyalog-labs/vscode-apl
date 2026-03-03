@@ -180,6 +180,16 @@ export function activateAplDebug(context: vscode.ExtensionContext, factory?: vsc
 		}
 	}));
 
+	// When the user switches active debug session, also switch the REPL tab
+	context.subscriptions.push(vscode.debug.onDidChangeActiveDebugSession((session) => {
+		if (session?.type === 'apl') {
+			const replId = (session.configuration as any).replId;
+			if (replId) {
+				replManager.switchToTab(replId);
+			}
+		}
+	}));
+
 	// override VS Code's default implementation of the debug hover
 	context.subscriptions.push(vscode.languages.registerEvaluatableExpressionProvider('apl', {
 		provideEvaluatableExpression(document: vscode.TextDocument, position: vscode.Position): vscode.ProviderResult<vscode.EvaluatableExpression> {
