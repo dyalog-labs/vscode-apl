@@ -259,7 +259,8 @@ export class ReplTab implements vscode.Disposable {
 				stopOnEntry: false,
 				noDebug: false,
 				traceExpression: code,
-				replId: this.replId
+				replId: this.replId,
+				internalConsoleOptions: 'neverOpen'
 			}
 		);
 
@@ -392,7 +393,8 @@ export class ReplTab implements vscode.Disposable {
 				stopOnEntry: false,
 				noDebug: false,
 				replSuspended: true,
-				replId: this.replId
+				replId: this.replId,
+				internalConsoleOptions: 'neverOpen'
 			}
 		);
 

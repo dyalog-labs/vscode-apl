@@ -435,8 +435,11 @@ export class AplSession extends EventEmitter {
 				break;
 
 			case 'AppendSessionOutput':
-				// Skip if debug handler is attached (it will handle output)
-				if (this._debugHandler) break;
+				if (this._debugHandler) {
+					// Emit for REPL display (debug handler handles execution separately)
+					this.emit('output', args.result, 'result');
+					break;
+				}
 				// Batch consecutive output messages
 				let output = args.result;
 				while (this._messageQueue.length && this._messageQueue[0][0] === 'AppendSessionOutput') {
@@ -484,10 +487,7 @@ export class AplSession extends EventEmitter {
 				break;
 
 			case 'StatusOutput':
-				// Skip if debug handler is attached (it will handle output)
-				if (!this._debugHandler) {
-					this.emit('output', args.text, 'error');
-				}
+				this.emit('output', args.text, 'error');
 				break;
 
 			case 'InterpreterStatus':

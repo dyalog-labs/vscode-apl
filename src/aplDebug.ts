@@ -5,7 +5,7 @@
 import {
 	Logger, logger,
 	LoggingDebugSession,
-	InitializedEvent, TerminatedEvent, StoppedEvent, BreakpointEvent, OutputEvent,
+	InitializedEvent, TerminatedEvent, StoppedEvent, BreakpointEvent,
 	// ProgressStartEvent, ProgressUpdateEvent, ProgressEndEvent, 
 	InvalidatedEvent, Event,
 	Thread, StackFrame, Scope, Source, Handles, Breakpoint, ContinuedEvent
@@ -140,13 +140,8 @@ export class AplDebugSession extends LoggingDebugSession {
 		this._runtime.on('breakpointValidated', (bp: IAplBreakpoint) => {
 			this.sendEvent(new BreakpointEvent('changed', { verified: bp.verified, id: bp.id } as DebugProtocol.Breakpoint));
 		});
-		this._runtime.on('output', (text, filePath, category) => {
-			const e: DebugProtocol.OutputEvent = new OutputEvent(text, category);
-			if (filePath) {
-				e.body.source = this.createSource(filePath);
-			}
-			this.sendEvent(e);
-		});
+		// Output goes to the REPL tab directly via AplSession 'output' events
+		this._runtime.on('output', () => {});
 		this._runtime.on('end', () => {
 			this.sendEvent(new TerminatedEvent());
 		});
@@ -233,17 +228,12 @@ export class AplDebugSession extends LoggingDebugSession {
 		const session = args.replId
 			? manager.getTab(args.replId)?.session
 			: manager.activeSession;
-		if (session?.isConnected) {
-			if (args.replSuspended) {
-				// Attach to already-suspended session (auto-debug on error)
-				await this._runtime.attachToSuspendedSession(session, args.cwd);
-			} else {
-				// Attach to existing REPL session instead of spawning new interpreter
-				await this._runtime.attachToSession(session, args.program, args.cwd, !!args.stopOnEntry, !!args.noDebug);
-			}
+		if (args.replSuspended) {
+			// Attach to already-suspended session (auto-debug on error)
+			await this._runtime.attachToSuspendedSession(session!, args.cwd);
 		} else {
-			// No REPL session - spawn new interpreter
-			await this._runtime.start(args.exe, args.dyalogCfg, args.program, args.cwd, !!args.stopOnEntry, !!args.noDebug);
+			// Attach to existing REPL session
+			await this._runtime.attachToSession(session!, args.program, args.cwd, !!args.stopOnEntry, !!args.noDebug);
 		}
 
 		// If traceExpression is provided (from REPL Ctrl+Enter), execute it with tracing

@@ -227,7 +227,7 @@ class AplConfigurationProvider implements vscode.DebugConfigurationProvider {
 	 * Massage a debug configuration just before a debug session is being launched,
 	 * e.g. add all missing attributes to the debug configuration.
 	 */
-	resolveDebugConfiguration(folder: WorkspaceFolder | undefined, config: DebugConfiguration, token?: CancellationToken): ProviderResult<DebugConfiguration> {
+	async resolveDebugConfiguration(folder: WorkspaceFolder | undefined, config: DebugConfiguration, token?: CancellationToken): Promise<DebugConfiguration | undefined> {
 
 		// if launch.json is missing or empty
 		if (!config.type && !config.request && !config.name) {
@@ -240,6 +240,31 @@ class AplConfigurationProvider implements vscode.DebugConfigurationProvider {
 				config.cwd = folder?.uri.fsPath;
 				config.stopOnEntry = true;
 			}
+		}
+
+		// Ensure a connected REPL session exists
+		const manager = ReplManager.getInstance();
+		config.internalConsoleOptions = 'neverOpen';
+
+		if (!config.replId) {
+			// Standalone launch — always create a fresh REPL tab
+			const replId = manager.createTab();
+			const tab = manager.getTab(replId)!;
+			vscode.commands.executeCommand('aplRepl.focus');
+			try {
+				await tab.handleConnect();
+				// Wait for the interpreter to be fully ready (SetPromptType)
+				if (!tab.session.isConnected) {
+					await new Promise<void>((resolve, reject) => {
+						const timeout = setTimeout(() => reject(new Error('timeout')), 10000);
+						tab.session.once('ready', () => { clearTimeout(timeout); resolve(); });
+					});
+				}
+			} catch {
+				vscode.window.showErrorMessage("Failed to start APL interpreter.");
+				return undefined;
+			}
+			config.replId = replId;
 		}
 
 		// Set cwd from workspace folder if not provided
@@ -257,9 +282,8 @@ class AplConfigurationProvider implements vscode.DebugConfigurationProvider {
 		}
 
 		if (!config.program && !config.cwd) {
-			return vscode.window.showInformationMessage("Cannot find a program to debug").then(_ => {
-				return undefined;	// abort launch
-			});
+			vscode.window.showInformationMessage("Cannot find a program to debug");
+			return undefined;
 		}
 
 		return config;
