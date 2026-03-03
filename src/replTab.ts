@@ -252,7 +252,7 @@ export class ReplTab implements vscode.Disposable {
 			workspaceFolders?.[0],
 			{
 				type: 'apl',
-				name: 'Trace Expression',
+				name: this.label,
 				request: 'launch',
 				program: '',
 				cwd: cwd,
@@ -386,7 +386,7 @@ export class ReplTab implements vscode.Disposable {
 			workspaceFolders?.[0],
 			{
 				type: 'apl',
-				name: 'Error Debug',
+				name: this.label,
 				request: 'launch',
 				program: '',
 				cwd: cwd,

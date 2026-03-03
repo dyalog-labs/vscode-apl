@@ -281,6 +281,12 @@ class AplConfigurationProvider implements vscode.DebugConfigurationProvider {
 			}
 		}
 
+		// Update session name to show the REPL number in the debug toolbar
+		const tab = manager.getTab(config.replId);
+		if (tab) {
+			config.name = tab.label;
+		}
+
 		if (!config.program && !config.cwd) {
 			vscode.window.showInformationMessage("Cannot find a program to debug");
 			return undefined;
@@ -314,7 +320,11 @@ export const workspaceFileAccessor: FileAccessor = {
 	},
 	async deleteFile(filePath: string): Promise<void> {
 		const uri = pathToUri(filePath);
-		return vscode.workspace.fs.delete(uri);
+		try {
+			await vscode.workspace.fs.delete(uri);
+		} catch (e: any) {
+			if (e?.code !== 'FileNotFound') { throw e; }
+		}
 	},
 	async readFile(path: string): Promise<Uint8Array> {
 		let uri: vscode.Uri;
