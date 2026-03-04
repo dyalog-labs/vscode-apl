@@ -607,7 +607,16 @@ export class ReplTab implements vscode.Disposable {
 			{ viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
 			{ enableScripts: true }
 		);
-		htmlPanel.webview.html = html;
+
+		// Inject a strict CSP: allow inline scripts/styles for interpreter
+		// content but block all network access to prevent exfiltration.
+		const csp = `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:;`;
+		const cspTag = `<meta http-equiv="Content-Security-Policy" content="${csp}">`;
+		const safeHtml = html.includes('<head>')
+			? html.replace('<head>', `<head>${cspTag}`)
+			: `<!DOCTYPE html><html><head>${cspTag}</head><body>${html}</body></html>`;
+
+		htmlPanel.webview.html = safeHtml;
 	}
 
 	public dispose(): void {

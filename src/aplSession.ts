@@ -245,6 +245,19 @@ export class AplSession extends EventEmitter {
 		const rideHost = host || config.get<string>('ride.host') || '127.0.0.1';
 		const ridePort = port || config.get<number>('ride.port') || 4502;
 
+		// Warn when connecting to a non-localhost host (unencrypted RIDE protocol)
+		if (!['127.0.0.1', 'localhost', '::1'].includes(rideHost)) {
+			const choice = await vscode.window.showWarningMessage(
+				`Connecting to remote RIDE host "${rideHost}:${ridePort}". The connection is unencrypted and unauthenticated. Continue?`,
+				{ modal: true },
+				'Connect'
+			);
+			if (choice !== 'Connect') {
+				this.setState('disconnected');
+				throw new Error('Connection cancelled by user');
+			}
+		}
+
 		return new Promise((resolve, reject) => {
 			this._client = Net.createConnection({ host: rideHost, port: ridePort }, () => {
 				this.log(`Connected to ${rideHost}:${ridePort}`);
