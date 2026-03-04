@@ -279,6 +279,13 @@ class AplConfigurationProvider implements vscode.DebugConfigurationProvider {
 				return undefined;
 			}
 			config.replId = replId;
+
+			// Auto-link workspace folder in the fresh session
+			const linkFolder = folder?.uri.fsPath || config.cwd;
+			if (linkFolder) {
+				const folderPath = linkFolder.replace(/\\/g, '/');
+				tab.session.execute(`⎕SE.Link.Create '#' '${folderPath}'`);
+			}
 		}
 
 		// Set cwd from workspace folder if not provided
