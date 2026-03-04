@@ -57,6 +57,9 @@ export class AplSession extends EventEmitter {
 	private _lastRundown = 0;
 	private _rundownTimeout = 0;
 	private _maxLogLength = 1000;
+	private _verbose = false;
+
+	public set verbose(v: boolean) { this._verbose = v; }
 
 	// Debug handler for delegating debug-specific messages
 	private _debugHandler?: (command: string, args: any) => void;
@@ -363,7 +366,7 @@ export class AplSession extends EventEmitter {
 				bufferOffset += messageLength;
 				bufferLength -= messageLength;
 
-				this.log(`recv ${this.truncate(message)}`);
+				if (this._verbose) { this.log(`recv ${this.truncate(message)}`); }
 
 				if (message[0] === '[') {
 					const parsed = JSON.parse(message);
@@ -535,14 +538,14 @@ export class AplSession extends EventEmitter {
 	public sendMessage(command: string, args: object): void {
 		if (this._client) {
 			const message = JSON.stringify([command, args]);
-			this.log(`send ${this.truncate(message)}`);
+			if (this._verbose) { this.log(`send ${this.truncate(message)}`); }
 			this._client.write(this.toBuffer(message));
 		}
 	}
 
 	private sendRaw(messages: string[]): void {
 		if (this._client) {
-			messages.forEach(m => this.log(`send ${this.truncate(m)}`));
+			if (this._verbose) { messages.forEach(m => this.log(`send ${this.truncate(m)}`)); }
 			this._client.write(Buffer.concat(messages.map(m => this.toBuffer(m))));
 		}
 	}
