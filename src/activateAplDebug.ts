@@ -11,6 +11,7 @@ import { FileAccessor } from './aplRuntime';
 import { ReplManager } from './replManager';
 import { ReplViewProvider } from './replPanel';
 import { AplBacktickHandler } from './aplBacktick';
+import { openAplDefinition } from './replTab';
 
 let aplStatusBarItem: vscode.StatusBarItem;
 
@@ -57,6 +58,19 @@ export function activateAplDebug(context: vscode.ExtensionContext, factory?: vsc
 		}),
 		vscode.commands.registerCommand('apl.repl.interrupt', () => {
 			replManager.interruptActiveTab();
+		}),
+		vscode.commands.registerTextEditorCommand('apl.goToDefinition', async (editor) => {
+			const position = editor.selection.active;
+			let wordRange = editor.document.getWordRangeAtPosition(position);
+			// When cursor is right after a word, step back one character
+			if (!wordRange && position.character > 0) {
+				wordRange = editor.document.getWordRangeAtPosition(position.translate(0, -1));
+			}
+			if (!wordRange) { return; }
+			const word = editor.document.getText(wordRange);
+			if (word) {
+				await openAplDefinition(word);
+			}
 		})
 	);
 
@@ -129,6 +143,25 @@ export function activateAplDebug(context: vscode.ExtensionContext, factory?: vsc
 			const ds = vscode.debug.activeDebugSession;
 			if (ds) {
 				ds.customRequest('cutback');
+			}
+		}),
+		vscode.commands.registerCommand('apl.smartStepOver', async () => {
+			const ds = vscode.debug.activeDebugSession;
+			const editor = vscode.window.activeTextEditor;
+			if (!ds || !editor) {
+				vscode.commands.executeCommand('type', { text: '\n' });
+				return;
+			}
+			try {
+				const st = await ds.customRequest('stackTrace', { threadId: 1, startFrame: 0, levels: 1 });
+				const topFrame = st.stackFrames?.[0];
+				if (topFrame && editor.selection.active.line === topFrame.line - 1) {
+					vscode.commands.executeCommand('workbench.action.debug.stepOver');
+				} else {
+					vscode.commands.executeCommand('type', { text: '\n' });
+				}
+			} catch {
+				vscode.commands.executeCommand('type', { text: '\n' });
 			}
 		})
 	);

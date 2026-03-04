@@ -111,9 +111,9 @@
         "when": "debugState == 'stopped'"
       },
       {
-        "command": "workbench.action.debug.stepOver",
+        "command": "apl.smartStepOver",
         "key": "enter",
-        "when": "debugState == 'stopped'"
+        "when": "debugState == 'stopped' && editorTextFocus"
       },
       {
         "command": "workbench.action.debug.stepInto",
@@ -128,6 +128,11 @@
         "command": "apl.focusRepl",
         "key": "ctrl+shift+r",
         "mac": "cmd+shift+r"
+      },
+      {
+        "command": "apl.goToDefinition",
+        "key": "shift+enter",
+        "when": "editorTextFocus && editorLangId == 'apl'"
       }
     ],
     "menus": {
@@ -240,6 +245,11 @@
       {
         "command": "apl.repl.interrupt",
         "title": "Interrupt Execution",
+        "category": "APL"
+      },
+      {
+        "command": "apl.goToDefinition",
+        "title": "Go to Definition",
         "category": "APL"
       }
     ],

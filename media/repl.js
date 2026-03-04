@@ -213,7 +213,11 @@
 			}
 		}
 
-		if (e.key === 'Enter' && e.ctrlKey) {
+		if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey) {
+			e.preventDefault();
+			e.stopPropagation();
+			goToDefinition();
+		} else if (e.key === 'Enter' && e.ctrlKey) {
 			e.preventDefault();
 			e.stopPropagation();
 			executeWithTrace();
@@ -307,6 +311,15 @@
 		// Clear input
 		inputEl.value = '';
 		inputEl.style.height = 'auto';
+	}
+
+	// Navigate to the definition of the name at cursor (Shift+Enter)
+	function goToDefinition() {
+		const pos = inputEl.selectionStart;
+		const name = getWordAt(inputEl.value, pos);
+		if (name) {
+			vscode.postMessage({ command: 'goToDefinition', name: name });
+		}
 	}
 
 	// Navigate through input history
@@ -712,7 +725,15 @@
 	}
 
 	function getWordAt(text, pos) {
-		if (pos < 0 || pos >= text.length) return '';
+		if (pos < 0 || pos > text.length) return '';
+		// When cursor is at the right border of a word, step back into it
+		if (pos >= text.length || !/[A-Za-z0-9_⍺⍵∆⍙⎕#.]/.test(text[pos])) {
+			if (pos > 0 && /[A-Za-z0-9_⍺⍵∆⍙⎕#.]/.test(text[pos - 1])) {
+				pos--;
+			} else {
+				return '';
+			}
+		}
 		let start = pos;
 		let end = pos;
 		while (start > 0 && /[A-Za-z0-9_⍺⍵∆⍙⎕#.]/.test(text[start - 1])) start--;

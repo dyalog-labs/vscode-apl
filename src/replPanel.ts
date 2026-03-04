@@ -97,6 +97,9 @@ export class ReplViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 				case 'navigateToError':
 					tab?.handleNavigateToError(message.name, message.line);
 					return;
+				case 'goToDefinition':
+					tab?.handleGoToDefinition(message.name);
+					return;
 			}
 		});
 

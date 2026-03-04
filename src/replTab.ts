@@ -311,50 +311,14 @@ export class ReplTab implements vscode.Disposable {
 	}
 
 	public async handleNavigateToError(name: string, line: number): Promise<void> {
-		const baseName = name.includes('.') ? name.split('.').pop()! : name;
-
-		const pattern = `**/${baseName}.{aplf,aplo,apln,aplc,aplci}`;
-		const files = await vscode.workspace.findFiles(pattern, '**/node_modules/**', 5);
-
-		if (files.length > 0) {
-			let targetFile = files[0];
-			if (files.length > 1) {
-				let matched = false;
-				if (name.includes('.')) {
-					const nsParts = name.split('.');
-					nsParts.pop();
-					const nsDirs = nsParts.filter(p => p !== '#');
-					if (nsDirs.length > 0) {
-						const suffix = '/' + nsDirs.join('/') + '/' + baseName + '.';
-						const match = files.find(f => f.fsPath.replace(/\\/g, '/').includes(suffix));
-						if (match) { targetFile = match; matched = true; }
-					}
-				}
-				if (!matched) {
-					targetFile = files.reduce((best, f) => {
-						const bestDepth = vscode.workspace.asRelativePath(best, false).split(/[/\\]/).length;
-						const fDepth = vscode.workspace.asRelativePath(f, false).split(/[/\\]/).length;
-						return fDepth < bestDepth ? f : best;
-					});
-				}
-			}
-
-			const doc = await vscode.workspace.openTextDocument(targetFile);
-			const editor = await vscode.window.showTextDocument(doc, {
-				preview: true,
-				preserveFocus: false
-			});
-
-			const targetLine = Math.min(line, doc.lineCount - 1);
-			const position = new vscode.Position(targetLine, 0);
-			editor.selection = new vscode.Selection(position, position);
-			editor.revealRange(
-				new vscode.Range(position, position),
-				vscode.TextEditorRevealType.InCenter
-			);
-		} else {
+		const found = await openAplDefinition(name, line);
+		if (!found) {
 			vscode.window.showWarningMessage(`Could not find source for: ${name}`);
 		}
+	}
+
+	public async handleGoToDefinition(name: string): Promise<void> {
+		await openAplDefinition(name);
 	}
 
 	public clear(): void {
@@ -625,4 +589,54 @@ export class ReplTab implements vscode.Disposable {
 		this._disposables.forEach(d => d.dispose());
 		this._disposables = [];
 	}
+}
+
+/**
+ * Search the workspace for an APL source file matching the given name and open it.
+ * Returns true if a file was found and opened, false otherwise.
+ */
+export async function openAplDefinition(name: string, line: number = 0): Promise<boolean> {
+	const baseName = name.includes('.') ? name.split('.').pop()! : name;
+
+	const pattern = `**/${baseName}.{aplf,aplo,apln,aplc,aplci}`;
+	const files = await vscode.workspace.findFiles(pattern, '**/node_modules/**', 5);
+
+	if (files.length === 0) { return false; }
+
+	let targetFile = files[0];
+	if (files.length > 1) {
+		let matched = false;
+		if (name.includes('.')) {
+			const nsParts = name.split('.');
+			nsParts.pop();
+			const nsDirs = nsParts.filter(p => p !== '#');
+			if (nsDirs.length > 0) {
+				const suffix = '/' + nsDirs.join('/') + '/' + baseName + '.';
+				const match = files.find(f => f.fsPath.replace(/\\/g, '/').includes(suffix));
+				if (match) { targetFile = match; matched = true; }
+			}
+		}
+		if (!matched) {
+			targetFile = files.reduce((best, f) => {
+				const bestDepth = vscode.workspace.asRelativePath(best, false).split(/[/\\]/).length;
+				const fDepth = vscode.workspace.asRelativePath(f, false).split(/[/\\]/).length;
+				return fDepth < bestDepth ? f : best;
+			});
+		}
+	}
+
+	const doc = await vscode.workspace.openTextDocument(targetFile);
+	const editor = await vscode.window.showTextDocument(doc, {
+		preview: true,
+		preserveFocus: false
+	});
+
+	const targetLine = Math.min(line, doc.lineCount - 1);
+	const position = new vscode.Position(targetLine, 0);
+	editor.selection = new vscode.Selection(position, position);
+	editor.revealRange(
+		new vscode.Range(position, position),
+		vscode.TextEditorRevealType.InCenter
+	);
+	return true;
 }
