@@ -351,12 +351,12 @@ async function showDocPage(docBasePath: string, relativePaths: string[]): Promis
 	// Create or reuse panel
 	if (helpPanel) {
 		helpPanel.title = title;
-		helpPanel.reveal(vscode.ViewColumn.Beside, true);
+		helpPanel.reveal(vscode.ViewColumn.Beside, false);
 	} else {
 		helpPanel = vscode.window.createWebviewPanel(
 			'aplDocumentation',
 			title,
-			{ viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
+			{ viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
 			{
 				enableScripts: false,
 				localResourceRoots: [vscode.Uri.file(docBasePath)],

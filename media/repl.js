@@ -190,12 +190,12 @@
 
 		// When autocomplete dropdown is open, intercept navigation keys
 		if (autocompleteDropdown) {
-			if (e.key === 'ArrowUp') {
+			if (e.key === 'ArrowUp' || (e.key === 'Tab' && e.shiftKey)) {
 				e.preventDefault();
 				e.stopPropagation();
 				navigateAutocomplete(-1);
 				return;
-			} else if (e.key === 'ArrowDown') {
+			} else if (e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) {
 				e.preventDefault();
 				e.stopPropagation();
 				navigateAutocomplete(1);
