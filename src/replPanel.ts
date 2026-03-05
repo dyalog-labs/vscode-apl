@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { ReplManager } from './replManager';
 import { getAplKeysForWebview } from './aplKeys';
+import { handleHelpForLine } from './aplHelp';
 
 /**
  * WebviewViewProvider for the APL REPL panel (bottom panel area).
@@ -14,13 +15,16 @@ export class ReplViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 	private _view?: vscode.WebviewView;
 	private _manager: ReplManager;
 	private _extensionUri: vscode.Uri;
+	private _context: vscode.ExtensionContext;
 
 	constructor(
 		extensionUri: vscode.Uri,
 		manager: ReplManager,
+		context: vscode.ExtensionContext,
 	) {
 		this._extensionUri = extensionUri;
 		this._manager = manager;
+		this._context = context;
 
 		// When tabs change (add/remove/switch), update the webview
 		this._manager.onTabsChanged = () => this._onTabsChanged();
@@ -99,6 +103,9 @@ export class ReplViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 					return;
 				case 'goToDefinition':
 					tab?.handleGoToDefinition(message.name);
+					return;
+				case 'help':
+					handleHelpForLine(message.line, message.pos, this._context.globalStorageUri.fsPath);
 					return;
 			}
 		});

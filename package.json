@@ -68,8 +68,10 @@
     "onDebugResolve:apl",
     "onDebugDynamicConfigurations:apl",
     "onCommand:extension.apl-debug.getProgramName",
+    "onCommand:extension.apl-debug.help",
     "onCommand:apl.focusRepl",
     "onCommand:apl.newRepl",
+    "onLanguage:apl",
     "onView:aplRepl"
   ],
   "workspaceTrust": {
@@ -127,7 +129,8 @@
       },
       {
         "command": "extension.apl-debug.help",
-        "key": "F1"
+        "key": "F1",
+        "when": "editorTextFocus"
       },
       {
         "command": "apl.focusRepl",
@@ -138,6 +141,11 @@
         "command": "apl.goToDefinition",
         "key": "shift+enter",
         "when": "editorTextFocus && editorLangId == 'apl'"
+      },
+      {
+        "command": "workbench.action.closeActiveEditor",
+        "key": "escape",
+        "when": "activeWebviewPanelId == 'aplDocumentation'"
       }
     ],
     "menus": {
@@ -225,8 +233,7 @@
       },
       {
         "command": "extension.apl-debug.help",
-        "title": "Show help for object at current pos",
-        "enablement": "inDebugMode && debugState != 'stopped'"
+        "title": "Show help for object at current pos"
       },
       {
         "command": "extension.apl-debug.toggleFormatting",

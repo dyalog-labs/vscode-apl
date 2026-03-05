@@ -244,6 +244,11 @@
 			e.preventDefault();
 			e.stopPropagation();
 			handleClear();
+		} else if (e.key === 'F1') {
+			e.preventDefault();
+			e.stopPropagation();
+			const pos = inputEl.selectionStart || 0;
+			vscode.postMessage({ command: 'help', line: inputEl.value, pos });
 		} else if (e.key === 'F5' || e.key === 'F10' || e.key === 'F11') {
 			// Let debug keys pass through to VS Code
 			return;

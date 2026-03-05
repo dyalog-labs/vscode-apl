@@ -12,6 +12,7 @@ import { ReplManager } from './replManager';
 import { ReplViewProvider } from './replPanel';
 import { AplBacktickHandler } from './aplBacktick';
 import { openAplDefinition } from './utils';
+import { handleHelp } from './aplHelp';
 
 let aplStatusBarItem: vscode.StatusBarItem;
 
@@ -28,7 +29,7 @@ export function activateAplDebug(context: vscode.ExtensionContext) {
 	context.subscriptions.push(replManager);
 
 	// Register the REPL view provider for bottom panel
-	const replProvider = new ReplViewProvider(context.extensionUri, replManager);
+	const replProvider = new ReplViewProvider(context.extensionUri, replManager, context);
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(ReplViewProvider.viewType, replProvider, {
 			webviewOptions: { retainContextWhenHidden: true }
@@ -107,19 +108,9 @@ export function activateAplDebug(context: vscode.ExtensionContext) {
 				});
 			}
 		}),
-		vscode.commands.registerTextEditorCommand('extension.apl-debug.help', (resource: vscode.TextEditor) => {
-			let targetResource = resource;
-			if (!targetResource && vscode.window.activeTextEditor) {
-				targetResource = vscode.window.activeTextEditor;
-			}
-			const { document, selection } = targetResource;
-			const textline = document.lineAt(selection.active.line);
-			if (textline) {
-				const ds = vscode.debug.activeDebugSession;
-				if (ds) {
-					ds.customRequest('help', { line: textline.text, pos: selection.active.character });
-				}
-			}
+		vscode.commands.registerTextEditorCommand('extension.apl-debug.help', (editor: vscode.TextEditor) => {
+			const globalStoragePath = context.globalStorageUri.fsPath;
+			handleHelp(editor, globalStoragePath);
 		}),
 		vscode.commands.registerCommand('extension.apl-debug.toggleFormatting', (variable) => {
 			const ds = vscode.debug.activeDebugSession;
