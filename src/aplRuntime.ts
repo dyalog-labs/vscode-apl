@@ -99,6 +99,9 @@ export class AplRuntime extends EventEmitter {
 	private _autoDebug = false;  // True when debug session was auto-started on error
 
 	private _winId = 0; // current window id
+	public get winId(): number { return this._winId; }
+	public get currentWindow(): OpenWindowMessage | undefined { return this._windows[this._winId]; }
+
 	private _executeText = '';
 	private _echoReceived = new Subject();
 	private _windows: OpenWindowMessage[] = [];

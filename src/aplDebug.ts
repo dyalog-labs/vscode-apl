@@ -66,6 +66,8 @@ export class AplDebugSession extends LoggingDebugSession {
 	private _saveWatcher?: vscode.Disposable;
 
 	private _cancelationTokens = new Map<number, boolean>();
+	private _cachedFrames: { index: number; name: string }[] = [];
+	private _currentLocalNames = new Set<string>();
 
 	private _showHex = false;
 	private _useInvalidatedEvent = false;
@@ -333,6 +335,7 @@ export class AplDebugSession extends LoggingDebugSession {
 	protected stackTraceRequest(response: DebugProtocol.StackTraceResponse, args: DebugProtocol.StackTraceArguments, request?: DebugProtocol.Request): void {
 		this._runtime.getSIStack()
 			.then((stk) => {
+				this._cachedFrames = stk.frames.map(f => ({ index: f.index, name: f.name }));
 				response.body = {
 					stackFrames: stk.frames.map(f => {
 						return new StackFrame(
@@ -349,12 +352,20 @@ export class AplDebugSession extends LoggingDebugSession {
 	}
 
 	protected scopesRequest(response: DebugProtocol.ScopesResponse, args: DebugProtocol.ScopesArguments): void {
+		const scopes: DebugProtocol.Scope[] = [];
 
-		response.body = {
-			scopes: [
-				new Scope("Global", this._variableHandles.create("global"), false)
-			]
-		};
+		// Show Local scope for the top frame when inside a function
+		const topFrame = this._cachedFrames[0];
+		if (args.frameId === 0 && topFrame?.name) {
+			this._currentLocalNames = new Set(this.parseLocalNames());
+			scopes.push(new Scope("Local", this._variableHandles.create("local"), false));
+		} else {
+			this._currentLocalNames = new Set();
+		}
+
+		scopes.push(new Scope("Global", this._variableHandles.create("global"), false));
+
+		response.body = { scopes };
 		this.sendResponse(response);
 	}
 
@@ -394,14 +405,75 @@ export class AplDebugSession extends LoggingDebugSession {
 
 	private _varMap = {};
 
+	/**
+	 * Parse local variable names from the current function header.
+	 * For tradfn: extracts result, arguments, and declared locals from the header line.
+	 * For dfn: returns ⍵ and ⍺ as potential locals.
+	 */
+	private parseLocalNames(): string[] {
+		const win = this._runtime.currentWindow;
+		if (!win?.text?.length || !win.name) { return []; }
+
+		const header = win.text[0];
+
+		// Dfn: first line starts with {
+		if (header.trimStart().startsWith('{')) {
+			return ['⍵', '⍺'];
+		}
+
+		// Tradfn header: {Z←} {A} FuncName {B} {;loc1} {;loc2} ...
+		const parts = header.split(';');
+		const declaredLocals = parts.slice(1).map(s => s.trim()).filter(s => s.length > 0);
+
+		const sig = parts[0];
+		const tokens = sig
+			.replace(/[{}]/g, '')       // Remove optional-arg braces
+			.split(/[←\s]+/)            // Split by ← and whitespace
+			.map(s => s.trim())
+			.filter(s => s.length > 0);
+
+		const names: string[] = [];
+		for (const token of tokens) {
+			if (token === win.name) { continue; } // Skip function name
+			names.push(token);
+		}
+
+		return [...names, ...declaredLocals];
+	}
+
 	protected async variablesRequest(response: DebugProtocol.VariablesResponse, args: DebugProtocol.VariablesArguments, request?: DebugProtocol.Request) {
 
-		const a = args;
 		const parent = this._variableHandles.get(args.variablesReference);
-		let variables: DebugProtocol.Variable[];
+
+		// Local scope: get values for local variable names in the trace window context
+		if (parent === "local") {
+			const localNames = [...this._currentLocalNames];
+			const winId = this._runtime.winId;
+
+			const vars = localNames.map(async (name) => {
+				const evalm = await this._runtime.getValueTip(name, 0, this._toolTipSeq++, winId, 100, 100);
+				if (!evalm || !evalm.tip.length) { return null; }
+				return {
+					name,
+					value: evalm.tip.join('\n'),
+					variablesReference: 0
+				} as DebugProtocol.Variable;
+			});
+
+			const variables = (await Promise.all(vars)).filter((v): v is DebugProtocol.Variable => v !== null);
+			response.body = { variables };
+			this.sendResponse(response);
+			return;
+		}
+
+		// Global scope (and child expansions): use TreeList
 		const parentNodeId = this._varMap[args.variablesReference] || 0;
 		const treenode = await this._runtime.getTreeList(parentNodeId);
+
+		const filterLocals = parentNodeId === 0 || parent === '#';
 		const vars = treenode.names.map(async (name, index) => {
+			// Filter out local variable names from the root namespace
+			if (filterLocals && this._currentLocalNames.has(name.trim())) { return null; }
 			const kind = this.classMap(treenode.classes[index]);
 			const evaluateName = parentNodeId === 0 ? name : `${parent}.${name}`;
 			const debugVar = {
@@ -428,11 +500,9 @@ export class AplDebugSession extends LoggingDebugSession {
 			}
 			return debugVar;
 		});
-		variables = await Promise.all(vars);
+		const variables = (await Promise.all(vars)).filter((v): v is DebugProtocol.Variable => v !== null);
 
-		response.body = {
-			variables: variables
-		};
+		response.body = { variables };
 		this.sendResponse(response);
 	}
 
