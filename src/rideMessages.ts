@@ -1,28 +1,28 @@
 /* eslint-disable  @typescript-eslint/naming-convention */
-interface AppendSessionOutputMessage {
+export interface AppendSessionOutputMessage {
 	result: string;
 }
-interface CloseWindowMessage {
+export interface CloseWindowMessage {
 	win: number;
 }
-interface DisconnectMessage {
+export interface DisconnectMessage {
 	message: string;
 }
-interface EchoInputMessage {
+export interface EchoInputMessage {
 	input: string;
 }
-interface GetHelpInformationMessage {
+export interface GetHelpInformationMessage {
 	line: string;
 	pos: number;
 }
-interface GotoWindowMessage {
+export interface GotoWindowMessage {
 	win: number;
 }
-interface HadErrorMessage {
+export interface HadErrorMessage {
 	dmx: number;
 	error: number;
 }
-interface InterpreterStatusMessage {
+export interface InterpreterStatusMessage {
 	CompactCount: number;
 	DQ: number;
 	GarbageCount: number;
@@ -34,7 +34,7 @@ interface InterpreterStatusMessage {
 	TRAP: number;
 	WA: number;
 }
-interface IdentifyMessage {
+export interface IdentifyMessage {
 	Port: number;
 	IPAddress: string;
 	Vendor: string;
@@ -50,17 +50,17 @@ interface IdentifyMessage {
 	date: string;
 	platform: string;
 }
-interface InternalErrorMessage {
+export interface InternalErrorMessage {
 	error: number;
 	error_text: string;
 	dmx: string;
 	message: string;
 }
-interface NotificationMessage {
+export interface NotificationMessage {
 	message: string;
 	token: number;
 }
-interface OpenWindowMessage {
+export interface OpenWindowMessage {
 	currentRow: number;
 	debugger: number;
 	entityType: number;
@@ -77,48 +77,48 @@ interface OpenWindowMessage {
 	token: number;
 	trace: number[];
 }
-interface OptionsDialogMessage {
+export interface OptionsDialogMessage {
 	options: string[];
 	text: string;
 	title: string;
 	token: number;
 	type: number;
 }
-interface ReplyClearTraceStopMonitorMessage {
+export interface ReplyClearTraceStopMonitorMessage {
 	monitors: number;
 	stops: number;
 	token: number;
 	traces: number;
 }
-interface ReplyFormatCodeMessage {
+export interface ReplyFormatCodeMessage {
 	win: number;
 	text: string[];
 }
-interface ReplyGetAutocompleteMessage {
+export interface ReplyGetAutocompleteMessage {
 	options: string[];
 	skip: number;
 	token: number;
 }
-interface ReplyGetConfigurationMessage {
+export interface ReplyGetConfigurationMessage {
 	configurations: {
 		name: string;
 		value: string;
 	}[];
 }
-interface ReplyGetHelpInformationMessage {
+export interface ReplyGetHelpInformationMessage {
 	url: string;
 }
-interface ReplyGetLanguageBarMessage {
+export interface ReplyGetLanguageBarMessage {
 	entries: {
 		name: string;
 		avchar: string;
 		helptext: string;
 	}[];
 }
-interface ReplyGetLogMessage {
+export interface ReplyGetLogMessage {
 	result: string[];
 }
-interface ReplyGetSIStackMessage {
+export interface ReplyGetSIStackMessage {
 	stack: {
 		description: string;
 		filecount: number;
@@ -127,10 +127,10 @@ interface ReplyGetSIStackMessage {
 	}[];
 	tid: number;
 }
-interface ReplyGetSyntaxInformationMessage {
+export interface ReplyGetSyntaxInformationMessage {
 	idioms: string[];
 }
-interface ReplyGetThreadsMessage {
+export interface ReplyGetThreadsMessage {
 	threads: {
 		description: string;
 		state: string;
@@ -139,44 +139,44 @@ interface ReplyGetThreadsMessage {
 		tid: number;
 	}[];
 }
-interface ReplySaveChangesMessage {
+export interface ReplySaveChangesMessage {
 	err: number;
 	win: number;
 }
-interface ReplyTreeListMessage {
+export interface ReplyTreeListMessage {
 	nodeId: number;
 	nodeIds: number[];
 	names: string[],
-    classes: number[];
+	classes: number[];
 	err: string;
 }
-interface SetHighlightLineMessage {
+export interface SetHighlightLineMessage {
 	line: number;
 	win: number;
 }
-interface SetPromptTypeMessage {
+export interface SetPromptTypeMessage {
 	type: number;
 }
-interface ShowHTMLMessage {
+export interface ShowHTMLMessage {
 	title: string;
 	html: string;
 }
-interface StatusOutputMessage {
+export interface StatusOutputMessage {
 	text: string;
 	flags: number;
 }
-interface StringDialogMessage {
+export interface StringDialogMessage {
 	defaultValue: string;
 	initialValue: string;
 	text: string;
 	title: string;
 	token: number;
 }
-interface SysErrorMessage {
+export interface SysErrorMessage {
 	text: string;
 	stack: string;
 }
-interface TaskDialogMessage {
+export interface TaskDialogMessage {
 	buttonText: string[];
 	footer: string;
 	options: string[];
@@ -185,37 +185,35 @@ interface TaskDialogMessage {
 	title: string;
 	token: number;
 }
-interface UnknownCommandMessage {
+export interface UnknownCommandMessage {
 	name: string;
 }
-interface UpdateDisplayNameMessage {
+export interface UpdateDisplayNameMessage {
 	displayName: string;
 }
-interface ValueTipMessage {
+export interface ValueTipMessage {
 	class: number;
 	startCol: number;
 	endCol: number;
 	token: number;
 	tip: string[];
 }
-interface WindowTypeChangedMessage {
+export interface WindowTypeChangedMessage {
 	tracer: number;
 	win: number;
 }
-interface RideMessage {
-	length: 2;
-	0: string;
-	1: AppendSessionOutputMessage | CloseWindowMessage | DisconnectMessage | EchoInputMessage |
-		GetHelpInformationMessage | GotoWindowMessage | HadErrorMessage |
-		IdentifyMessage | InterpreterStatusMessage | InternalErrorMessage |
-		NotificationMessage | OpenWindowMessage |
-		OptionsDialogMessage | ReplyClearTraceStopMonitorMessage | ReplyFormatCodeMessage |
-		ReplyGetAutocompleteMessage | ReplyGetConfigurationMessage |
-		ReplyGetHelpInformationMessage | ReplyGetLanguageBarMessage | ReplyGetLogMessage |
-		ReplyGetSIStackMessage | ReplyGetSyntaxInformationMessage | ReplyGetThreadsMessage |
-		ReplySaveChangesMessage | ReplyTreeListMessage | SetHighlightLineMessage |
-		StringDialogMessage | TaskDialogMessage |
-		SetPromptTypeMessage | ShowHTMLMessage | StatusOutputMessage |
-		SysErrorMessage | UnknownCommandMessage | UpdateDisplayNameMessage |
-		ValueTipMessage | WindowTypeChangedMessage;
-}
+export type RideMessage = [string,
+	AppendSessionOutputMessage | CloseWindowMessage | DisconnectMessage | EchoInputMessage |
+	GetHelpInformationMessage | GotoWindowMessage | HadErrorMessage |
+	IdentifyMessage | InterpreterStatusMessage | InternalErrorMessage |
+	NotificationMessage | OpenWindowMessage |
+	OptionsDialogMessage | ReplyClearTraceStopMonitorMessage | ReplyFormatCodeMessage |
+	ReplyGetAutocompleteMessage | ReplyGetConfigurationMessage |
+	ReplyGetHelpInformationMessage | ReplyGetLanguageBarMessage | ReplyGetLogMessage |
+	ReplyGetSIStackMessage | ReplyGetSyntaxInformationMessage | ReplyGetThreadsMessage |
+	ReplySaveChangesMessage | ReplyTreeListMessage | SetHighlightLineMessage |
+	StringDialogMessage | TaskDialogMessage |
+	SetPromptTypeMessage | ShowHTMLMessage | StatusOutputMessage |
+	SysErrorMessage | UnknownCommandMessage | UpdateDisplayNameMessage |
+	ValueTipMessage | WindowTypeChangedMessage
+];

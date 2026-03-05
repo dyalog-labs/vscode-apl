@@ -11,7 +11,7 @@ import { FileAccessor } from './aplRuntime';
 import { ReplManager } from './replManager';
 import { ReplViewProvider } from './replPanel';
 import { AplBacktickHandler } from './aplBacktick';
-import { openAplDefinition } from './replTab';
+import { openAplDefinition } from './utils';
 
 let aplStatusBarItem: vscode.StatusBarItem;
 
@@ -181,18 +181,6 @@ export function activateAplDebug(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('apl', {
 		provideDebugConfigurations(folder: WorkspaceFolder | undefined): ProviderResult<DebugConfiguration[]> {
 			return [
-				{
-					name: "Dynamic Launch",
-					request: "launch",
-					type: "apl",
-					program: "${file}"
-				},
-				{
-					name: "Another Dynamic Launch",
-					request: "launch",
-					type: "apl",
-					program: "${file}"
-				},
 				{
 					name: "APL Launch",
 					request: "launch",

@@ -7,6 +7,20 @@ import * as fs from 'fs';
 import * as Path from 'path';
 import { Subject } from 'await-notify';
 import { AplSession } from './aplSession';
+import { normPath, PendingRequest, PendingRequests } from './utils';
+import type {
+	AppendSessionOutputMessage, CloseWindowMessage, DisconnectMessage, EchoInputMessage,
+	GetHelpInformationMessage, GotoWindowMessage, HadErrorMessage, IdentifyMessage,
+	InterpreterStatusMessage, InternalErrorMessage, NotificationMessage, OpenWindowMessage,
+	OptionsDialogMessage, ReplyClearTraceStopMonitorMessage, ReplyFormatCodeMessage,
+	ReplyGetAutocompleteMessage, ReplyGetConfigurationMessage, ReplyGetHelpInformationMessage,
+	ReplyGetLanguageBarMessage, ReplyGetLogMessage, ReplyGetSIStackMessage,
+	ReplyGetSyntaxInformationMessage, ReplyGetThreadsMessage, ReplySaveChangesMessage,
+	ReplyTreeListMessage, RideMessage, SetHighlightLineMessage, SetPromptTypeMessage,
+	ShowHTMLMessage, StatusOutputMessage, StringDialogMessage, SysErrorMessage,
+	TaskDialogMessage, UnknownCommandMessage, UpdateDisplayNameMessage, ValueTipMessage,
+	WindowTypeChangedMessage,
+} from './rideMessages';
 
 export interface FileAccessor {
 	isWindows: boolean;
@@ -89,7 +103,6 @@ export class AplRuntime extends EventEmitter {
 	private _echoReceived = new Subject();
 	private _windows: OpenWindowMessage[] = [];
 
-	private normPath = (path: string) => path.replace(/^\w:/, m => m.toUpperCase());
 
 	constructor(private _fileAccessor: FileAccessor) {
 		super();
@@ -353,9 +366,7 @@ export class AplRuntime extends EventEmitter {
 	}
 	
 	private replyGetAutocomplete(x: ReplyGetAutocompleteMessage) {
-		if (this._autocompletion) {
-			this._autocompletion.resolve(x.options);
-		}
+		this._autocompletion.resolve(x.options);
 	}
 
 	private replyGetHelpInformation(x: ReplyGetHelpInformationMessage) {
@@ -382,10 +393,7 @@ export class AplRuntime extends EventEmitter {
 	}
 	private valueTip(x: ValueTipMessage) {
 		this.log('getValueTip');
-		if (this._valueTip[x.token]) {
-			this._valueTip[x.token].resolve(x);
-			delete this._valueTip[x.token];
-		}
+		this._valueTip.resolve(x.token, x);
 	}
 	private setHighlightLine(x: SetHighlightLineMessage) {
 		if (this._windows[x.win]) {
@@ -459,24 +467,20 @@ export class AplRuntime extends EventEmitter {
 	}
 	private replyGetSIStack(x: ReplyGetSIStackMessage) {
 		this.log('getSIStack');
-		if (this._siStack) {
-			const frames: IStackFrame[] = x.stack.map((s, i) => {
-				const m = /(.*)\[(\d+)\]/.exec(s.description) || [];
-				const file = this._linkMap[m[1]];
-				const frame: IStackFrame = {
-					index: i,
-					name: m[1],
-					file: s.filename || file,
-					line: s.fileline + +m[2],
-				};
-				return frame;
-			});
-			this._siStack.resolve({
-				frames: frames,
-				count: x.stack.length
-			});
-			delete this._siStackPromise;
-		}
+		const frames: IStackFrame[] = x.stack.map((s, i) => {
+			const m = /(.*)\[(\d+)\]/.exec(s.description) || [];
+			const file = this._linkMap[m[1]];
+			return {
+				index: i,
+				name: m[1],
+				file: s.filename || file,
+				line: s.fileline + +m[2],
+			};
+		});
+		this._siStack.resolve({
+			frames,
+			count: x.stack.length
+		});
 	}
 	private replyGetThreads(x: ReplyGetThreadsMessage) {
 		// const l = x.threads.length;
@@ -499,10 +503,7 @@ export class AplRuntime extends EventEmitter {
 		// });
 	}
 	private replyTreeList(x: ReplyTreeListMessage) {
-		if (this._treelist[x.nodeId]) {
-			this._treelist[x.nodeId].resolve(x);
-			delete this._treelist[x.nodeId];
-		}
+		this._treelist.resolve(x.nodeId, x);
 	}
 	private statusOutput(x: StatusOutputMessage) {
 		this.sendEvent('output', x.text, undefined, 'stderr');
@@ -527,31 +528,27 @@ export class AplRuntime extends EventEmitter {
 		this.exec(1, expr);
 	}
 
-	private _autocompletion: any;
+	private _autocompletion = new PendingRequest<string[]>();
 	/**
 	 * Get autocomplete
 	 */
-	public getAutocomplete(line: string, pos: number, token: number): PromiseLike<string[]> {
-		return new Promise((resolve, reject) => {
-			this._autocompletion = { resolve, reject };
-			this.send('GetAutocomplete', { line, pos, token });
-		});
+	public getAutocomplete(line: string, pos: number, token: number): Promise<string[]> {
+		const promise = this._autocompletion.create();
+		this.send('GetAutocomplete', { line, pos, token });
+		return promise;
 	}
 
-	private _siStack: any;
-	private _siStackPromise: any;
+	private _siStack = new PendingRequest<IStack>();
 	/**
 	 * Get stack
 	 */
-	public getSIStack(): PromiseLike<IStack> {
-		if (this._siStackPromise) {
-			return this._siStackPromise;
+	public getSIStack(): Promise<IStack> {
+		if (this._siStack.pending) {
+			return this._siStack.create();
 		}
-		this._siStackPromise = new Promise((resolve, reject) => {
-			this._siStack = { resolve, reject };
-			this.send('GetSIStack', {});
-		});
-		return this._siStackPromise;
+		const promise = this._siStack.create();
+		this.send('GetSIStack', {});
+		return promise;
 	}
 
 	/**
@@ -623,13 +620,13 @@ export class AplRuntime extends EventEmitter {
 	 * in the interpreter, enabling "edit and continue" during debugging.
 	 */
 	public syncFileToTracer(filePath: string): void {
-		const normalizedPath = this.normPath(Path.resolve(filePath));
+		const normalizedPath = normPath(Path.resolve(filePath));
 
 		for (const token of Object.keys(this._windows)) {
 			const win = this._windows[+token];
 			if (!win?.filename) continue;
 
-			if (this.normPath(Path.resolve(win.filename)) !== normalizedPath) continue;
+			if (normPath(Path.resolve(win.filename)) !== normalizedPath) continue;
 
 			try {
 				let content = fs.readFileSync(filePath, 'utf-8');
@@ -654,7 +651,7 @@ export class AplRuntime extends EventEmitter {
 					let startIdx = -1;
 					// Try _linkInfo first for accurate start line
 					const linkRow = this._linkInfo.find(row =>
-						this.normPath(row.filePath) === normalizedPath &&
+						normPath(row.filePath) === normalizedPath &&
 						(row.aplName.endsWith(`.${win.name}`) || row.aplName === win.name)
 					);
 					if (linkRow) {
@@ -722,40 +719,30 @@ export class AplRuntime extends EventEmitter {
 		this.send('GetHelpInformation', message);
 	}
 
-	private _valueTip = {};
+	private _valueTip = new PendingRequests<ValueTipMessage>();
 	/**
 	 * Get Value Tip
 	 */
 	public getValueTip(
-		line: string, 
-		pos: number, 
-		token: number, 
-		win: number = 0, 
-		maxWidth :number = 200, 
-		maxHeight: number = 100): PromiseLike<ValueTipMessage> {
-		setTimeout(() => { this._valueTip[token]?.resolve(); }, 100);
-		return new Promise((resolve, reject) => {
-			this._valueTip[token] = { resolve, reject };
-			this.send('GetValueTip', { // ask interpreter
-				win,
-				token,
-				line,
-				pos,
-				maxWidth,
-				maxHeight,
-			  });
-		});
+		line: string,
+		pos: number,
+		token: number,
+		win: number = 0,
+		maxWidth: number = 200,
+		maxHeight: number = 100): Promise<ValueTipMessage> {
+		const promise = this._valueTip.create(token, 500);
+		this.send('GetValueTip', { win, token, line, pos, maxWidth, maxHeight });
+		return promise;
 	}
 
-	private _treelist = {};
+	private _treelist = new PendingRequests<ReplyTreeListMessage>();
 	/**
-	 * Get autocomplete
+	 * Get tree list
 	 */
-	public getTreeList(nodeId: number): PromiseLike<ReplyTreeListMessage> {
-		return new Promise((resolve, reject) => {
-			this._treelist[nodeId] = { resolve, reject };
-			this.send('TreeList', { nodeId });
-		});
+	public getTreeList(nodeId: number): Promise<ReplyTreeListMessage> {
+		const promise = this._treelist.create(nodeId);
+		this.send('TreeList', { nodeId });
+		return promise;
 	}
 
 	public getStepInTargets(frameId: number): IStepInTargets[] {
@@ -763,7 +750,7 @@ export class AplRuntime extends EventEmitter {
 	}
 
 	public getBreakpoints(path: string, line: number): number[] {
-		const filePath = this.normPath(path);
+		const filePath = normPath(path);
 		let bps = this._breakPoints.get(filePath);
 		if (bps && bps.some(bp => bp.line === line)) {
 			return [0];
@@ -776,7 +763,7 @@ export class AplRuntime extends EventEmitter {
 	 */
 	public async setBreakPoint(path: string, line: number): Promise<IAplBreakpoint> {
 
-		const filePath = this.normPath(path);
+		const filePath = normPath(path);
 		let bps = this._breakPoints.get(filePath);
 		if (!bps) {
 			bps = new Array<IAplBreakpoint>();
@@ -796,9 +783,9 @@ export class AplRuntime extends EventEmitter {
 		if (this._linkInfo.length === 0) {
 			return;
 		}
-		const normalizedPath = this.normPath(filePath);
+		const normalizedPath = normPath(filePath);
 		bps.forEach((bp) => {
-			const row = this._linkInfo.find((row) => this.normPath(row.filePath) === normalizedPath && row.startLine < bp.line);
+			const row = this._linkInfo.find((row) => normPath(row.filePath) === normalizedPath && row.startLine < bp.line);
 			if (row) {
 				const lines = fnbp[row.aplName] || [];
 				lines.push(bp.line - row.startLine);
@@ -815,7 +802,7 @@ export class AplRuntime extends EventEmitter {
 	 * Clear breakpoint in file with given line.
 	 */
 	public clearBreakPoint(path: string, line: number): IAplBreakpoint | undefined {
-		const bps = this._breakPoints.get(this.normPath(path));
+		const bps = this._breakPoints.get(normPath(path));
 		if (bps) {
 			const index = bps.findIndex(bp => bp.line === line);
 			if (index >= 0) {
@@ -831,11 +818,11 @@ export class AplRuntime extends EventEmitter {
 	 * Clear all breakpoints for file.
 	 */
 	public clearBreakpoints(path: string): void {
-		const filePath = this.normPath(path);
+		const filePath = normPath(path);
 		this._breakPoints.delete(filePath);
 		// Clear stops on ALL functions in this file, not just one
 		for (const row of this._linkInfo) {
-			if (this.normPath(row.filePath) === filePath) {
+			if (normPath(row.filePath) === filePath) {
 				this.exec(0, `{}⍬ ⎕STOP '${row.aplName}'`);
 			}
 		}
@@ -856,7 +843,7 @@ export class AplRuntime extends EventEmitter {
 			return;
 		}
 
-		const bps = this._breakPoints.get(this.normPath(path));
+		const bps = this._breakPoints.get(normPath(path));
 		if (bps) {
 			bps.forEach(bp => {
 				if (!bp.verified && lines.includes(bp.line)) {

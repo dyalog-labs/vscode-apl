@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as Path from 'path';
 import { AplSession } from './aplSession';
+import { normPath } from './utils';
 
 interface LinkInfoRow {
 	aplName: string;
@@ -27,7 +28,6 @@ export class ReplBreakpointSync implements vscode.Disposable {
 	private _folder = '';
 	private _disposables: vscode.Disposable[] = [];
 
-	private normPath = (path: string) => path.replace(/^\w:/, m => m.toUpperCase());
 
 	constructor() {
 		this._disposables.push(
@@ -190,7 +190,7 @@ export class ReplBreakpointSync implements vscode.Disposable {
 		const affectedFiles = new Set<string>();
 		for (const bp of [...e.added, ...e.removed, ...e.changed]) {
 			if (bp instanceof vscode.SourceBreakpoint) {
-				affectedFiles.add(this.normPath(bp.location.uri.fsPath));
+				affectedFiles.add(normPath(bp.location.uri.fsPath));
 			}
 		}
 
@@ -202,13 +202,13 @@ export class ReplBreakpointSync implements vscode.Disposable {
 	private _syncBreakpointsForFile(filePath: string): void {
 		if (!this._session?.isConnected) { return; }
 
-		const normalizedPath = this.normPath(filePath);
+		const normalizedPath = normPath(filePath);
 
 		// Get all enabled VS Code breakpoints for this file
 		const vscBps = vscode.debug.breakpoints.filter(
 			bp => bp instanceof vscode.SourceBreakpoint
 				&& bp.enabled
-				&& this.normPath(bp.location.uri.fsPath) === normalizedPath
+				&& normPath(bp.location.uri.fsPath) === normalizedPath
 		) as vscode.SourceBreakpoint[];
 
 		// Group breakpoint lines by APL function name
@@ -216,7 +216,7 @@ export class ReplBreakpointSync implements vscode.Disposable {
 		for (const bp of vscBps) {
 			const line = bp.location.range.start.line; // 0-based
 			const row = this._linkInfo.find(
-				r => this.normPath(r.filePath) === normalizedPath && r.startLine < line
+				r => normPath(r.filePath) === normalizedPath && r.startLine < line
 			);
 			if (row) {
 				const lines = fnbp[row.aplName] || [];
@@ -228,7 +228,7 @@ export class ReplBreakpointSync implements vscode.Disposable {
 		// Find all APL functions mapped to this file
 		const allFunctions = new Set(
 			this._linkInfo
-				.filter(r => this.normPath(r.filePath) === normalizedPath)
+				.filter(r => normPath(r.filePath) === normalizedPath)
 				.map(r => r.aplName)
 		);
 
@@ -252,7 +252,7 @@ export class ReplBreakpointSync implements vscode.Disposable {
 		const affectedFiles = new Set<string>();
 		for (const bp of vscode.debug.breakpoints) {
 			if (bp instanceof vscode.SourceBreakpoint) {
-				affectedFiles.add(this.normPath(bp.location.uri.fsPath));
+				affectedFiles.add(normPath(bp.location.uri.fsPath));
 			}
 		}
 

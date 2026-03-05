@@ -43,7 +43,7 @@
 
 		// Set up clickable error locations
 		outputEl.addEventListener('click', function(e) {
-			var location = e.target.closest('.apl-location');
+			const location = e.target.closest('.apl-location');
 			if (location) {
 				vscode.postMessage({
 					command: 'navigateToError',
@@ -66,17 +66,17 @@
 		vscode.postMessage({ command: 'newTab' });
 	}
 
-	var dragState = null; // { tabId, startX, el }
+	let dragState = null; // { tabId, startX, el }
 
 	function renderTabs(tabs) {
 		tabListEl.innerHTML = '';
 		tabs.forEach(function(tab) {
-			var tabEl = document.createElement('div');
+			const tabEl = document.createElement('div');
 			tabEl.className = 'tab' + (tab.isActive ? ' active' : '');
 			tabEl.setAttribute('data-tab-id', tab.replId);
 			tabEl.draggable = true;
 
-			var labelEl = document.createElement('span');
+			const labelEl = document.createElement('span');
 			labelEl.className = 'tab-label';
 			labelEl.textContent = tab.label;
 			tabEl.appendChild(labelEl);
@@ -105,8 +105,8 @@
 				if (!dragState || dragState.tabId === tab.replId) return;
 				e.preventDefault();
 				e.dataTransfer.dropEffect = 'move';
-				var rect = tabEl.getBoundingClientRect();
-				var midX = rect.left + rect.width / 2;
+				const rect = tabEl.getBoundingClientRect();
+				const midX = rect.left + rect.width / 2;
 				tabEl.classList.toggle('drop-before', e.clientX < midX);
 				tabEl.classList.toggle('drop-after', e.clientX >= midX);
 			});
@@ -117,9 +117,9 @@
 				e.preventDefault();
 				tabEl.classList.remove('drop-before', 'drop-after');
 				if (!dragState || dragState.tabId === tab.replId) return;
-				var rect = tabEl.getBoundingClientRect();
-				var midX = rect.left + rect.width / 2;
-				var before = e.clientX < midX;
+				const rect = tabEl.getBoundingClientRect();
+				const midX = rect.left + rect.width / 2;
+				const before = e.clientX < midX;
 				vscode.postMessage({
 					command: 'reorderTab',
 					tabId: dragState.tabId,
@@ -130,7 +130,7 @@
 
 			// Close button (only show if more than one tab)
 			if (tabs.length > 1) {
-				var closeEl = document.createElement('span');
+				const closeEl = document.createElement('span');
 				closeEl.className = 'tab-close';
 				closeEl.textContent = '\u00d7';
 				closeEl.title = 'Close';
@@ -171,7 +171,7 @@
 
 			// Look up the APL character (includes ` -> ⋄)
 			if (aplKeyMap) {
-				var entry = aplKeyMap.get(e.key);
+				const entry = aplKeyMap.get(e.key);
 				if (entry) {
 					insertAtCursor(entry.char);
 				}
@@ -389,7 +389,7 @@
 
 	function highlightError(html) {
 		// Highlight error type names (e.g., VALUE ERROR, SYNTAX ERROR)
-		var result = html.replace(
+		let result = html.replace(
 			/^([A-Z][A-Z ]* ERROR.*)/gm,
 			'<span class="apl-error-type">$1</span>'
 		);
@@ -555,18 +555,18 @@
 	// --- Backtick prefix mode helpers ---
 
 	function insertAtCursor(text) {
-		var start = inputEl.selectionStart;
-		var end = inputEl.selectionEnd;
-		var value = inputEl.value;
+		const start = inputEl.selectionStart;
+		const end = inputEl.selectionEnd;
+		const value = inputEl.value;
 		inputEl.value = value.slice(0, start) + text + value.slice(end);
-		var newPos = start + text.length;
+		const newPos = start + text.length;
 		inputEl.selectionStart = inputEl.selectionEnd = newPos;
 		handleInput();
 	}
 
 	function setPrefixMode(active) {
 		prefixMode = active;
-		var inputArea = document.getElementById('input-area');
+		const inputArea = document.getElementById('input-area');
 		if (active) {
 			inputArea.classList.add('prefix-mode');
 		} else {
@@ -577,22 +577,22 @@
 	// --- Language bar ---
 
 	function renderLanguageBar() {
-		var existing = document.getElementById('language-bar');
+		const existing = document.getElementById('language-bar');
 		if (existing) existing.remove();
 
 		if (!aplKeyEntries || aplKeyEntries.length === 0) return;
 
-		var bar = document.createElement('div');
+		const bar = document.createElement('div');
 		bar.id = 'language-bar';
 
 		// Toggle button
-		var toggle = document.createElement('button');
+		const toggle = document.createElement('button');
 		toggle.id = 'langbar-toggle';
 		toggle.textContent = 'APL';
 		toggle.title = 'Toggle APL character bar';
 		toggle.addEventListener('click', function() {
-			var content = document.getElementById('langbar-content');
-			var isHidden = content.style.display === 'none';
+			const content = document.getElementById('langbar-content');
+			const isHidden = content.style.display === 'none';
 			content.style.display = isHidden ? 'flex' : 'none';
 			toggle.classList.toggle('collapsed', !isHidden);
 			vscode.setState(Object.assign(vscode.getState() || {}, { languageBarOpen: isHidden }));
@@ -600,14 +600,14 @@
 		bar.appendChild(toggle);
 
 		// Character grid
-		var content = document.createElement('div');
+		const content = document.createElement('div');
 		content.id = 'langbar-content';
 
 		// Characters to hide from bar
-		var hideFromBar = { '\u236B': true, '\u2359': true }; // ⍫ Del Tilde, ⍙ Delta Underbar
+		const hideFromBar = { '\u236B': true, '\u2359': true }; // ⍫ Del Tilde, ⍙ Delta Underbar
 
 		// Extra characters to add at the end (useful APL chars available on keyboard)
-		var extras = [
+		const extras = [
 			{ char: '\u22C4', name: 'Diamond', key: '`' },
 			{ char: '+', name: 'Plus', key: null },
 			{ char: '@', name: 'At', key: null },
@@ -619,10 +619,10 @@
 		];
 
 		// Collect unique characters (avoid duplicates from shift variants)
-		var seen = {};
-		var categoryOrder = ['arithmetic','comparison','logical','structural',
+		const seen = {};
+		const categoryOrder = ['arithmetic','comparison','logical','structural',
 			'selection','assignment','flow','io','other'];
-		var categories = {};
+		const categories = {};
 
 		aplKeyEntries.forEach(function(entry) {
 			if (entry.key === '`') return;
@@ -634,11 +634,11 @@
 		});
 
 		categoryOrder.forEach(function(cat) {
-			var entries = categories[cat];
+			const entries = categories[cat];
 			if (!entries || entries.length === 0) return;
 
 			entries.forEach(function(entry) {
-				var btn = document.createElement('button');
+				const btn = document.createElement('button');
 				btn.className = 'langbar-char';
 				btn.textContent = entry.char;
 				btn.title = entry.name + ' (`' + entry.key + ')';
@@ -653,7 +653,7 @@
 		// Append extra characters
 		extras.forEach(function(extra) {
 			if (seen[extra.char]) return;
-			var btn = document.createElement('button');
+			const btn = document.createElement('button');
 			btn.className = 'langbar-char';
 			btn.textContent = extra.char;
 			btn.title = extra.name + (extra.key ? ' (`' + extra.key + ')' : '');
@@ -665,7 +665,7 @@
 		});
 
 		// Restore collapsed state
-		var state = vscode.getState();
+		const state = vscode.getState();
 		if (state && state.languageBarOpen === false) {
 			content.style.display = 'none';
 			toggle.classList.add('collapsed');
@@ -676,7 +676,7 @@
 		bar.appendChild(content);
 
 		// Insert before the input-area
-		var inputArea = document.getElementById('input-area');
+		const inputArea = document.getElementById('input-area');
 		inputArea.parentNode.insertBefore(bar, inputArea);
 	}
 

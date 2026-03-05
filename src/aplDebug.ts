@@ -15,6 +15,7 @@ import { DebugProtocol } from '@vscode/debugprotocol';
 import { basename } from 'path-browserify';
 import { AplRuntime, IAplBreakpoint, FileAccessor } from './aplRuntime';
 import { ReplManager } from './replManager';
+import type { InterpreterStatusMessage, OpenWindowMessage, ReplyGetHelpInformationMessage, ShowHTMLMessage, ValueTipMessage } from './rideMessages';
 import { Subject } from 'await-notify';
 
 // function timeout(ms: number) {
