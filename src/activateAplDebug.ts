@@ -145,6 +145,21 @@ export function activateAplDebug(context: vscode.ExtensionContext) {
 				ds.customRequest('cutback');
 			}
 		}),
+		vscode.commands.registerCommand('apl.escapeAction', async () => {
+			const ds = vscode.debug.activeDebugSession;
+			const editor = vscode.window.activeTextEditor;
+			if (ds && editor) {
+				try {
+					const st = await ds.customRequest('stackTrace', { threadId: 1, startFrame: 0, levels: 1 });
+					const topFrame = st.stackFrames?.[0];
+					if (topFrame?.source?.path && editor.document.uri.fsPath === topFrame.source.path) {
+						ds.customRequest('cutback');
+						return;
+					}
+				} catch { /* fall through to close */ }
+			}
+			vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+		}),
 		vscode.commands.registerCommand('apl.smartStepOver', async () => {
 			const ds = vscode.debug.activeDebugSession;
 			const editor = vscode.window.activeTextEditor;

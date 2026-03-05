@@ -89,7 +89,20 @@ export async function openAplDefinition(name: string, line: number = 0): Promise
 	const pattern = `**/${baseName}.{aplf,aplo,apln,aplc,aplci}`;
 	const files = await vscode.workspace.findFiles(pattern, '**/node_modules/**', 5);
 
-	if (files.length === 0) { return false; }
+	if (files.length === 0) {
+		const folder = vscode.workspace.workspaceFolders?.[0];
+		if (!folder) { return false; }
+		const nsParts = name.split('.').filter(p => p !== '#');
+		const funcName = nsParts.pop()!;
+		const dirParts = nsParts;
+		const relPath = [...dirParts, `${funcName}.aplf`].join('/');
+		const newUri = vscode.Uri.joinPath(folder.uri, relPath);
+		const untitledUri = newUri.with({ scheme: 'untitled' });
+		const doc = await vscode.workspace.openTextDocument(untitledUri);
+		const editor = await vscode.window.showTextDocument(doc, { preview: false, preserveFocus: false });
+		await editor.edit(eb => eb.insert(new vscode.Position(0, 0), funcName + '\n'));
+		return true;
+	}
 
 	let targetFile = files[0];
 	if (files.length > 1) {
@@ -115,7 +128,7 @@ export async function openAplDefinition(name: string, line: number = 0): Promise
 
 	const doc = await vscode.workspace.openTextDocument(targetFile);
 	const editor = await vscode.window.showTextDocument(doc, {
-		preview: true,
+		preview: false,
 		preserveFocus: false
 	});
 

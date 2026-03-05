@@ -108,7 +108,12 @@
       {
         "command": "extension.apl-debug.cutback",
         "key": "escape",
-        "when": "debugState == 'stopped'"
+        "when": "debugState == 'stopped' && !editorTextFocus"
+      },
+      {
+        "command": "apl.escapeAction",
+        "key": "escape",
+        "when": "editorTextFocus && editorLangId == 'apl'"
       },
       {
         "command": "apl.smartStepOver",
@@ -245,6 +250,11 @@
       {
         "command": "apl.repl.interrupt",
         "title": "Interrupt Execution",
+        "category": "APL"
+      },
+      {
+        "command": "apl.escapeAction",
+        "title": "Close Editor or Cutback",
         "category": "APL"
       },
       {
