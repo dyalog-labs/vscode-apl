@@ -161,7 +161,7 @@ export function activateAplDebug(context: vscode.ExtensionContext) {
 			try {
 				const st = await ds.customRequest('stackTrace', { threadId: 1, startFrame: 0, levels: 1 });
 				const topFrame = st.stackFrames?.[0];
-				if (topFrame && editor.selection.active.line === topFrame.line - 1) {
+				if (topFrame?.source?.path && editor.document.uri.fsPath === topFrame.source.path && editor.selection.active.line === topFrame.line - 1) {
 					vscode.commands.executeCommand('workbench.action.debug.stepOver');
 				} else {
 					vscode.commands.executeCommand('type', { text: '\n' });
