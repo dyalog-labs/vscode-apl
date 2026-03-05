@@ -146,6 +146,11 @@
         "command": "workbench.action.closeActiveEditor",
         "key": "escape",
         "when": "activeWebviewPanelId == 'aplDocumentation'"
+      },
+      {
+        "command": "apl.localizeVariable",
+        "key": "ctrl+up",
+        "when": "editorTextFocus && editorLangId == 'apl'"
       }
     ],
     "menus": {
@@ -267,6 +272,11 @@
       {
         "command": "apl.goToDefinition",
         "title": "Go to Definition",
+        "category": "APL"
+      },
+      {
+        "command": "apl.localizeVariable",
+        "title": "Localize Variable",
         "category": "APL"
       }
     ],

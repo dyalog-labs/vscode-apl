@@ -72,6 +72,75 @@ export function activateAplDebug(context: vscode.ExtensionContext) {
 			if (word) {
 				await openAplDefinition(word);
 			}
+		}),
+		vscode.commands.registerTextEditorCommand('apl.localizeVariable', (editor) => {
+			const doc = editor.document;
+			const position = editor.selection.active;
+
+			// Get word at cursor, including ⎕-prefixed system names
+			const aplNamePattern = /⎕?\w+/;
+			let wordRange = doc.getWordRangeAtPosition(position, aplNamePattern);
+			if (!wordRange && position.character > 0) {
+				wordRange = doc.getWordRangeAtPosition(position.translate(0, -1), aplNamePattern);
+			}
+			if (!wordRange) { return; }
+			const word = doc.getText(wordRange);
+			if (!word) { return; }
+
+			// Find the function header line:
+			// - In multi-function files, search upward for a ∇ line with content
+			// - In single-function .aplf files, use line 0
+			let headerLineIdx = -1;
+			for (let i = position.line; i >= 0; i--) {
+				const m = doc.lineAt(i).text.match(/^\s*∇(.+)/);
+				if (m && m[1].trim()) {
+					headerLineIdx = i;
+					break;
+				}
+			}
+			if (headerLineIdx < 0) {
+				headerLineIdx = 0; // single-function file
+			}
+
+			const headerLine = doc.lineAt(headerLineIdx);
+			const headerText = headerLine.text;
+
+			// Strip leading ∇ if present to get pure header content
+			const nablaMatch = headerText.match(/^\s*∇\s*(.*)/);
+			const headerContent = nablaMatch ? nablaMatch[1] : headerText;
+
+			// Split by ; — first part is signature, rest are locals
+			const parts = headerContent.split(';');
+			const signature = parts[0];
+			const locals = parts.slice(1).map(s => s.trim());
+
+			// Don't toggle if the name is part of the function signature
+			const sigNames: string[] = signature.match(/[⎕]?\w+/g) || [];
+			if (sigNames.includes(word)) { return; }
+
+			const localIdx = locals.indexOf(word);
+			if (localIdx >= 0) {
+				// Already localized — remove it
+				// Find the ";word" occurrence in the header to remove
+				const beforeSemicolons = parts.slice(0, localIdx + 1).join(';').length;
+				const removedPart = parts[localIdx + 1];
+				const startOffset = beforeSemicolons; // position of the ";"
+				const endOffset = beforeSemicolons + 1 + removedPart.length; // ";" + content
+
+				// Calculate absolute positions in the line
+				const lineStart = headerLine.range.start;
+				const contentStart = headerText.length - headerContent.length;
+				const removeStart = lineStart.translate(0, contentStart + startOffset);
+				const removeEnd = lineStart.translate(0, contentStart + endOffset);
+				editor.edit(editBuilder => {
+					editBuilder.delete(new vscode.Range(removeStart, removeEnd));
+				});
+			} else {
+				// Not yet localized — append ;name to the header line
+				editor.edit(editBuilder => {
+					editBuilder.insert(headerLine.range.end, ';' + word);
+				});
+			}
 		})
 	);
 
