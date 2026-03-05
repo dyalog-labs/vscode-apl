@@ -15,7 +15,7 @@ import { openAplDefinition } from './replTab';
 
 let aplStatusBarItem: vscode.StatusBarItem;
 
-export function activateAplDebug(context: vscode.ExtensionContext, factory?: vscode.DebugAdapterDescriptorFactory) {
+export function activateAplDebug(context: vscode.ExtensionContext) {
 
 	// create a new status bar item that we can now manage
 	aplStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -203,14 +203,7 @@ export function activateAplDebug(context: vscode.ExtensionContext, factory?: vsc
 		}
 	}, vscode.DebugConfigurationProviderTriggerKind.Dynamic));
 
-	if (!factory) {
-		factory = new InlineDebugAdapterFactory();
-	}
-	context.subscriptions.push(vscode.debug.registerDebugAdapterDescriptorFactory('apl', factory));
-	if ('dispose' in factory) {
-		// @ts-ignore
-		context.subscriptions.push(factory);
-	}
+	context.subscriptions.push(vscode.debug.registerDebugAdapterDescriptorFactory('apl', new InlineDebugAdapterFactory()));
 	context.subscriptions.push(vscode.debug.onDidReceiveDebugSessionCustomEvent((customEvent) => {
 		if (customEvent.event === 'statusInformation') {
 			aplStatusBarItem.text = customEvent.body.text;

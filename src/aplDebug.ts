@@ -248,15 +248,15 @@ export class AplDebugSession extends LoggingDebugSession {
 
 		this.sendResponse(response);
 	}
-	protected async disconnectRequest(response: DebugProtocol.DisconnectResponse, args: DebugProtocol.DisconnectArguments, request?: DebugProtocol.Request) {
+	protected disconnectRequest(response: DebugProtocol.DisconnectResponse, args: DebugProtocol.DisconnectArguments, request?: DebugProtocol.Request) {
 		this._saveWatcher?.dispose();
-		await this._runtime.terminate();
+		this._runtime.terminate();
 		this.sendResponse(response);
 	}
 
-	protected async terminateRequest(response: DebugProtocol.TerminateResponse, args: DebugProtocol.TerminateArguments, request?: DebugProtocol.Request) {
+	protected terminateRequest(response: DebugProtocol.TerminateResponse, args: DebugProtocol.TerminateArguments, request?: DebugProtocol.Request) {
 		this._saveWatcher?.dispose();
-		await this._runtime.terminate();
+		this._runtime.terminate();
 		this.sendResponse(response);
 	}
 

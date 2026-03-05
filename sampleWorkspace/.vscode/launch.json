@@ -1,7 +1,4 @@
 {
-	// Use IntelliSense to learn about possible attributes.
-	// Hover to view descriptions of existing attributes.
-	// For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
 	"version": "0.2.0",
 	"configurations": [
 		{
@@ -17,28 +14,8 @@
 		{
 			"type": "apl",
 			"request": "launch",
-			"name": "Debug current workspace 18.0",
-			"exe": "C:\\Program Files\\Dyalog\\Dyalog APL-64 18.0 Unicode\\dyalog.exe",
-			"program": "",
-			"cwd": "${workspaceFolder}",
-			"stopOnEntry": true,
-			"trace": false
-		},
-		{
-			"type": "apl",
-			"request": "launch",
-			"name": "Debug current file 18.2",
-			"exe": "/Applications/Dyalog-18.2.app/Contents/Resources/Dyalog/mapl",
-			"program": "${file}",
-			"cwd": "${workspaceFolder}",
-			"stopOnEntry": true,
-			"trace": false
-		},
-		{
-			"type": "apl",
-			"request": "launch",
-			"name": "Debug current workspace 18.2",
-			"exe": "/Applications/Dyalog-18.2.app/Contents/Resources/Dyalog/mapl",
+			"name": "Debug current workspace 20.0",
+			"exe": "C:\\Program Files\\Dyalog\\Dyalog APL-64 20.0 Unicode\\dyalog.exe",
 			"program": "",
 			"cwd": "${workspaceFolder}",
 			"stopOnEntry": true,

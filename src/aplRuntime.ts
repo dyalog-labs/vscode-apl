@@ -3,10 +3,8 @@
  *--------------------------------------------------------*/
 
 import { EventEmitter } from 'events';
-import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as Path from 'path';
-import * as Net from 'net';
 import { Subject } from 'await-notify';
 import { AplSession } from './aplSession';
 
@@ -83,66 +81,18 @@ export class AplRuntime extends EventEmitter {
 	private _folder = '.';
 	private _link = '';
 
-	private _client?: Net.Socket;
-	private _session?: AplSession;  // Shared session when attached to REPL
-	private _attachedToSession = false;  // Flag to indicate if using shared session
+	private _session?: AplSession;
 	private _autoDebug = false;  // True when debug session was auto-started on error
 
-	private _exe = 'dyalog.exe';
-	private _dyalogCfg: string | undefined;
-	private _child?: cp.ChildProcess;
-
-	private promptType = 0;
-	private mq: Array<RideMessage> = []; // mq:message queue
-	private blk = 0; // blk:blocked?
-	private last = 0; // last:when last rundown finished
-	private tid = 0; // tid:timeout id
 	private _winId = 0; // current window id
-	private _startTime = 0; // start time of debug session
 	private _executeText = '';
 	private _echoReceived = new Subject();
-	private _sessionReady = new Subject();
 	private _windows: OpenWindowMessage[] = [];
 
-	private maxl = 1000;
-
 	private normPath = (path: string) => path.replace(/^\w:/, m => m.toUpperCase());
-		
 
 	constructor(private _fileAccessor: FileAccessor) {
 		super();
-		this._startTime = Date.now();
-	}
-
-	/**
-	 * Start executing the given program.
-	 */
-	public async start(exe: string, dcfg:string | undefined, program: string, folder: string, stopOnEntry: boolean, noDebug: boolean): Promise<void> {
-
-		if (exe) {
-			this._exe = exe;
-		}
-		this._dyalogCfg = dcfg;
-		this._noDebug = noDebug;
-		this._sourceFile = program;
-		this._folder = folder;
-		this._link = `${this._folder}/.vscode/link.json`;
-		this._trace = stopOnEntry;
-
-		this.launchDyalog();
-		await this._sessionReady.wait();
-
-		if (this._folder) {
-			await this.exec(0, `⎕SE.Link.Create # '${this._folder}'`, 1);
-		}
-		if (this._sourceFile) {
-			await this.exec(0, `name←⊃2 ⎕FIX 'file://${this._sourceFile}'`, 1);
-		}
-		await this.getLinkInfo();
-		await this.initialiseBreakpoints();
-		if (this._sourceFile) {
-			await this.exec(this._trace ? 1 : 0, '⍎name', 1);
-		}
 	}
 
 	/**
@@ -151,7 +101,6 @@ export class AplRuntime extends EventEmitter {
 	 */
 	public async attachToSession(session: AplSession, program: string, folder: string, stopOnEntry: boolean, noDebug: boolean): Promise<void> {
 		this._session = session;
-		this._attachedToSession = true;
 		this._noDebug = noDebug;
 		this._sourceFile = program;
 		this._folder = folder;
@@ -162,10 +111,6 @@ export class AplRuntime extends EventEmitter {
 		session.setDebugHandler((command, args) => {
 			this.handleMessage([command, args] as RideMessage);
 		});
-
-		// Signal that session is ready (already connected)
-		this.promptType = 1;
-		this._sessionReady.notify();
 
 		// Get link info from existing session
 		await this.getLinkInfo();
@@ -197,7 +142,6 @@ export class AplRuntime extends EventEmitter {
 			this._session.clearDebugHandler();
 			this._session = undefined;
 		}
-		this._attachedToSession = false;
 		this._autoDebug = false;
 	}
 
@@ -208,7 +152,6 @@ export class AplRuntime extends EventEmitter {
 	 */
 	public async attachToSuspendedSession(session: AplSession, folder: string): Promise<void> {
 		this._session = session;
-		this._attachedToSession = true;
 		this._autoDebug = true;
 		this._noDebug = false;
 		this._sourceFile = '';
@@ -222,10 +165,6 @@ export class AplRuntime extends EventEmitter {
 		session.setDebugHandler((command, args) => {
 			this.handleMessage([command, args] as RideMessage);
 		});
-
-		// Signal that session is ready (already connected and suspended)
-		this.promptType = 1;
-		this._sessionReady.notify();
 
 		// Check if still suspended (user might have resolved it already)
 		if (!session.isSuspended) {
@@ -278,79 +217,12 @@ export class AplRuntime extends EventEmitter {
 		await Promise.all(promises);
 	}
 
-	private _terminate: any;
 	/**
 	 * Stop debug session.
 	 */
-	public async terminate(): Promise<void> {
-		// When attached to shared session, just detach - don't kill the interpreter
-		if (this._attachedToSession) {
-			this._autoDebug = false;
-			this.detachFromSession();
-			return;
-		}
-		// Otherwise send Exit to terminate the interpreter
-		return new Promise((resolve, reject) => {
-			this._terminate = { resolve, reject };
-			this.send('Exit', { code: 0 });
-		});
-
-	}
-
-	private launchDyalog(): void {
-		/* eslint-disable  @typescript-eslint/naming-convention */
-		const env = {
-			APLK0: 'default',
-			AUTOCOMPLETE_PREFIXSIZE: '0',
-			CLASSICMODE: '1',
-			SINGLETRACE: '1',
-			RIDE_SPAWNED: '1',
-			TRACE_ON_ERROR: '1',
-		};
-		if (this._dyalogCfg) {
-			env["ConfigFile"] = this._dyalogCfg;
-		}
-		/* eslint-enable  @typescript-eslint/naming-convention */
-
-		let srv = Net.createServer((y) => {
-			this.log('spawned interpreter connected');
-			srv && srv.close();
-			this._client = y;
-			this.initInterpreterConn();
-		});
-		srv.on('error', (e) => {
-			this.err(e);
-		});
-		srv.listen(0, '127.0.0.1', () => {
-			const adr = srv.address() as Net.AddressInfo;
-			const hp = `${adr.address}:${adr.port}`;
-			this.log(`listening for connections from spawned interpreter on ${hp}`);
-			this.log(`spawning interpreter ${JSON.stringify(this._exe)}`);
-			let args = ['+s', '-q', '-nokbd'];
-			const stdio: cp.StdioOptions = ['pipe', 'ignore', 'ignore'];
-			if (/^win/i.test(process.platform)) { args = []; stdio[0] = 'ignore'; }
-			try {
-				this._child = cp.spawn(this._exe, args, {
-					stdio,
-					detached: true,
-					env: {
-						...process.env,
-						...env,
-						RIDE_INIT: `CONNECT:${hp}`, // eslint-disable-line  @typescript-eslint/naming-convention 
-					},
-				});
-			} catch (e) { this.err(`{e}`); return; }
-			this._child.on('exit', (code, sig) => {
-				srv && srv.close();
-				if (code !== 0) {
-					this.err(`Interpreter ${code !== null ? `exited with code ${code}` : `received ${sig}`}`);
-				}
-			});
-			this._child.on('error', (y) => {
-				srv && srv.close();
-				this.err(y);
-			});
-		});
+	public terminate(): void {
+		this._autoDebug = false;
+		this.detachFromSession();
 	}
 
 	private err(e: Error | string): void {
@@ -359,80 +231,6 @@ export class AplRuntime extends EventEmitter {
 
 	private log(msg: String): void {
 		console.log(msg);
-	}
-
-
-	private initInterpreterConn(): void {
-		let b = Buffer.alloc(0x100000);
-		let ib = 0; // ib:offset in b
-		let nb = 0; // nb:length in b
-		let old; // old:have we warned about an old interpreter?
-		let handshakeDone = false;
-		this._client?.on('data', (x) => {
-			if (nb + x.length > b.length) {
-				const r = Buffer.alloc(2 ** Math.ceil(Math.log(nb + x.length) / Math.log(2)));
-				b.copy(r, 0, ib, ib + nb);
-				ib = 0;
-				b = r;
-				this.log(`resized recv buffer to ${b.length}`);
-			} else if (ib + nb + x.length > b.length) {
-				b.copy(b, 0, ib, ib + nb);
-				ib = 0;
-			}
-			x.copy(b, ib + nb, 0, x.length);
-			nb += x.length;
-			let n; // message length
-			while (nb >= 4 && (n = b.readInt32BE(ib)) <= nb) {
-				if (n <= 8) { this.err('Bad protocol message'); break; }
-				const m = `${b.slice(ib + 8, ib + n)}`;
-				ib += n;
-				nb -= n;
-				this.log(`recv ${this.trunc(m)}`);
-				if (m[0] === '[') {
-					const u = JSON.parse(m);
-					this.recv(u[0], u[1]);
-				} else if (m[0] === '<' && !old) {
-					old = 1;
-					this.err('This version of RIDE cannot talk to interpreters older than v15.0');
-				} else if (/^UsingProtocol=/.test(m)) {
-					if (m.slice(m.indexOf('=') + 1) === '2') {
-						handshakeDone = true;
-					} else {
-						this.err('Unsupported RIDE protocol version');
-						break;
-					}
-				}
-			}
-		});
-		this._client?.on('error', (x) => {
-			this._client && this.err(x);
-		});
-		this._client?.on('end', () => {
-			if (handshakeDone) {
-				this.log('interpreter disconnected');
-				this.sendEvent('end');
-			} else {
-				this.err('Either no interpreter is listening on the specified port'
-					+ ' or the interpreter is already serving another RIDE client.');
-			}
-		});
-		this.sendEach([
-			'SupportedProtocols=2', 'UsingProtocol=2',
-			'["Identify",{"identity":1}]', '["Connect",{"remoteId":2}]', '["GetWindowLayout",{}]',
-			// '["Subscribe",{"status":["statusfields","stack","threads"]}]'
-			'["Subscribe",{"status":["statusfields"]}]'
-		]);
-	}
-
-	private rd() { // run down the queue
-		while (this.mq.length && !this.blk) {
-			const a = this.mq.shift(); // a[0]:command name, a[1]:command args
-			if (a) {
-				this.handleMessage(a);
-			}
-		}
-		this.last = +new Date();
-		this.tid = 0;
 	}
 
 	private handleMessage(rideMessage: RideMessage) {
@@ -482,54 +280,9 @@ export class AplRuntime extends EventEmitter {
 		this.sendEvent('output', text, this._sourceFile, 'stdout');
 	}
 
-	private rrd() { // request rundown
-		if (!this.tid) {
-			if (Date.now() - this.last < 20) {
-				this.tid = +setTimeout(() => { this.rd(); }, 20);
-			} else {
-				this.rd();
-			}
-		}
-	}
-
-	private recv(x: string, y) {
-		this.mq.push([x, y]);
-		this.rrd();
-	}
-
-	private trunc = (x: string) => (x.length > this.maxl ? `${x.slice(0, this.maxl - 3)}...` : x);
-		
-	private toBuf(x: string) {
-		const b = Buffer.from(`xxxxRIDE${x}`);
-		b.writeInt32BE(b.length, 0);
-		return b;
-	}
-
-
-	private sendEach(x: Array<string>) {
-		// When attached to session, send through the session
-		if (this._attachedToSession && this._session) {
-			x.forEach((y) => {
-				this.log(`send ${this.trunc(y)}`);
-				const [command, args] = JSON.parse(y);
-				this._session!.sendMessage(command, args);
-			});
-			return;
-		}
-		// Otherwise send directly to client socket
-		if (this._client) {
-			x.forEach((y) => this.log(`send ${this.trunc(y)}`));
-			this._client.write(Buffer.concat(x.map(this.toBuf)));
-		}
-	}
-
-	private async send(x: string, y: object) {
-		if (this.promptType
-			|| /Interrupt$|TreeList|Reply|FormatCode|GetAutocomplete|SaveChanges|CloseWindow|Exit/.test(x)) {
-			this.sendEach([JSON.stringify([x, y])]);
-		} else {
-			await this._sessionReady.wait();
-			this.sendEach([JSON.stringify([x, y])]);
+	private send(command: string, args: object): void {
+		if (this._session) {
+			this._session.sendMessage(command, args);
 		}
 	}
 
@@ -542,25 +295,12 @@ export class AplRuntime extends EventEmitter {
 		}
 	}
 
-	private remoteIdentification?: object;
-	private isClassic?: boolean;
-
 	// RIDE protocol message handlers
 	private appendSessionOutput(x: AppendSessionOutputMessage) {
-		let s = x.result;
-		const nq = Math.min(this.mq.length, 256);
-		let i: number;
-		for (i = 0; i < nq && this.mq[i][0] === 'AppendSessionOutput'; i++) {
-			const r = (this.mq[i][1] as AppendSessionOutputMessage).result;
-			s += r;
-		}
-		i && this.mq.splice(0, i);
-		this.add(s);
+		this.add(x.result);
 	}
 
 	private identify(x: IdentifyMessage) {
-		this.remoteIdentification = x;
-		this.isClassic = x.arch[0] === 'C';
 	}
 
 	private invalidSyntax() {
@@ -568,10 +308,7 @@ export class AplRuntime extends EventEmitter {
 	}
 
 	private disconnect(x: DisconnectMessage) {
-		if (this._terminate) {
-			this._terminate.resolve(x.message);
-		}
-		this.err('Interpreter disconnected: ' + x.message);
+		this.log('Interpreter disconnected: ' + x.message);
 		this.sendEvent('end');
 	}
 
@@ -600,15 +337,6 @@ export class AplRuntime extends EventEmitter {
 	}
 
 	private setPromptType(x: SetPromptTypeMessage) {
-		const t = x.type;
-		this.promptType = t;
-		// if (t && ide.pending.length) D.send('Execute', { trace: 0, text: `${ide.pending.shift()}\n` });
-		// else eachWin((w) => { w.prompt(t); });
-		// (t === 2 || t === 4) && ide.wins[0].focus(); // ⎕ / ⍞ input
-		// t === 1 && ide.getStats();
-		if (t === 1) {
-			this._sessionReady.notifyAll();
-		}
 	}
 
 	private _hadError = 0;
@@ -777,15 +505,7 @@ export class AplRuntime extends EventEmitter {
 		}
 	}
 	private statusOutput(x: StatusOutputMessage) {
-		let s = x.text;
-		const nq = Math.min(this.mq.length, 256);
-		let i: number;
-		for (i = 0; i < nq && this.mq[i][0] === 'StatusOutput'; i++) {
-			const r = (this.mq[i][1] as StatusOutputMessage).text;
-			s += r;
-		}
-		i && this.mq.splice(0, i);
-		this.sendEvent('output', s, undefined, 'stderr');
+		this.sendEvent('output', x.text, undefined, 'stderr');
 	}
 	private replyGetLog(x: ReplyGetLogMessage) {
 		this.add(x.result.join('\n'));
