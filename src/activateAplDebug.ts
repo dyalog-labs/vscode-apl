@@ -357,7 +357,7 @@ class AplConfigurationProvider implements vscode.DebugConfigurationProvider {
 			try {
 				await tab.handleConnect();
 				// Wait for the interpreter to be fully ready (SetPromptType)
-				if (!tab.session.isConnected) {
+				if (!tab.session.isConnected || tab.session.state !== 'connected') {
 					await new Promise<void>((resolve, reject) => {
 						const timeout = setTimeout(() => reject(new Error('timeout')), 10000);
 						tab.session.once('ready', () => { clearTimeout(timeout); resolve(); });
@@ -373,7 +373,9 @@ class AplConfigurationProvider implements vscode.DebugConfigurationProvider {
 			const linkFolder = folder?.uri.fsPath || config.cwd;
 			if (linkFolder) {
 				const folderPath = linkFolder.replace(/\\/g, '/');
-				tab.session.execute(`⎕SE.Link.Create '#' '${folderPath}'`);
+				// Must await: getLinkInfo() in launchRequest needs Link to be done
+				await this._execAndWait(tab, `)clear`);
+				await this._execAndWait(tab, `⎕SE.Link.Create '#' '${folderPath}'`);
 			}
 		}
 
@@ -403,6 +405,31 @@ class AplConfigurationProvider implements vscode.DebugConfigurationProvider {
 		}
 
 		return config;
+	}
+
+	/** Execute APL and wait for the echo before continuing. */
+	private _execAndWait(tab: import('./replTab').ReplTab, expression: string): Promise<void> {
+		return new Promise<void>(resolve => {
+			const session = tab.session;
+			if (!session.isConnected) { resolve(); return; }
+
+			const text = expression.endsWith('\n') ? expression : `${expression}\n`;
+			const handler = (input: string) => {
+				if (input === text) {
+					session.removeListener('echo', handler);
+					clearTimeout(timer);
+					resolve();
+				}
+			};
+			session.on('echo', handler);
+
+			const timer = setTimeout(() => {
+				session.removeListener('echo', handler);
+				resolve();
+			}, 10000);
+
+			session.execute(expression);
+		});
 	}
 }
 

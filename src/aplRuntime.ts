@@ -851,7 +851,7 @@ export class AplRuntime extends EventEmitter {
 			bps.forEach(bp => {
 				if (!bp.verified && lines.includes(bp.line)) {
 					bp.verified = true;
-					this.sendEvent('breakpointValidated', bp);				
+					this.sendEvent('breakpointValidated', bp);
 				}
 			});
 		}
