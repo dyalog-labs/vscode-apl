@@ -13,6 +13,9 @@ export class MockRideServer {
 	/** Messages received from the client */
 	public received: Array<[string, any]> = [];
 
+	/** Custom per-command response handlers (checked before auto-respond) */
+	private _handlers = new Map<string, (args: any) => void>();
+
 	/** Resolved when a client connects and completes handshake */
 	public clientConnected: Promise<void>;
 	private _resolveConnected!: () => void;
@@ -87,7 +90,16 @@ export class MockRideServer {
 		setRemaining(buffer.slice(offset));
 	}
 
+	/**
+	 * Register a custom handler for a command. Takes priority over auto-respond.
+	 */
+	public onCommand(command: string, handler: (args: any) => void): void {
+		this._handlers.set(command, handler);
+	}
+
 	private _autoRespond(command: string, args: any): void {
+		const custom = this._handlers.get(command);
+		if (custom) { custom(args); return; }
 		switch (command) {
 			case 'Identify':
 				this.send('Identify', { identity: 1, version: '19.0.0 (mock)' });

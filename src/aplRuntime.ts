@@ -373,7 +373,9 @@ export class AplRuntime extends EventEmitter {
 	}
 
 	private gotoWindow(x: GotoWindowMessage) {
-		this.sendEvent('openWindow', { filename: this._windows[x.win].filename });
+		const win = this._windows[x.win];
+		if (!win) return;
+		this.sendEvent('openWindow', { filename: win.filename });
 	}
 
 	private windowTypeChanged(x: WindowTypeChangedMessage) {
@@ -799,7 +801,13 @@ export class AplRuntime extends EventEmitter {
 		const normalizedPath = normPath(filePath);
 		const matched: IAplBreakpoint[] = [];
 		bps.forEach((bp) => {
-			const row = this._linkInfo.find((row) => normPath(row.filePath) === normalizedPath && row.startLine <= bp.line);
+			// Find the closest preceding function (largest startLine <= bp.line)
+			let row: typeof this._linkInfo[0] | undefined;
+			for (const r of this._linkInfo) {
+				if (normPath(r.filePath) === normalizedPath && r.startLine <= bp.line) {
+					if (!row || r.startLine > row.startLine) { row = r; }
+				}
+			}
 			if (row) {
 				const lines = fnbp[row.aplName] || [];
 				lines.push(bp.line - row.startLine);
