@@ -220,10 +220,8 @@ export class DyalogBackend implements TestBackend {
 			// Write file first, then Link — so Link discovers it on initial scan
 			await this._exec(`⎕SE.Link.Create '#' '${this._tempDir.replace(/\\/g, '/')}'`);
 			this._linked = true;
-		} else {
-			// Already linked — notify Link about the new file via Add
-			await this._exec(`⎕SE.Link.Add '#.${name}'`);
 		}
+		// Link's file watcher auto-fixes new files in the linked directory
 
 		// Use the same mechanism as the extension: 5177⌶ → link.json → parse
 		await (this.runtime as any).getLinkInfo();
