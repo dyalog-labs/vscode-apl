@@ -416,8 +416,10 @@ export class AplDebugSession extends LoggingDebugSession {
 
 		const header = win.text[0];
 
-		// Dfn: first line starts with {
-		if (header.trimStart().startsWith('{')) {
+		// A dfn starts with { but tradfns can start with result as {Z}← in eg {Z}←FuncName.
+		// Current heuristic is looking for {...}←
+		const trimmed = header.trimStart();
+		if (trimmed.startsWith('{') && !/^\s*\{[^}]*\}\s*←/.test(trimmed)) {
 			return ['⍵', '⍺'];
 		}
 
