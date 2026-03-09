@@ -304,23 +304,13 @@ export function activateAplDebug(context: vscode.ExtensionContext) {
 
 			for (let l = viewport.start.line; l <= context.stoppedLocation.end.line; l++) {
 				const line = document.lineAt(l);
-				var regExp = /local_[ifso]/ig;	// match variables of the form local_i, local_f, Local_i, LOCAL_S...
-				do {
-					var m = regExp.exec(line.text);
-					if (m) {
-						const varName = m[0];
-						const varRange = new vscode.Range(l, m.index, l, m.index + varName.length);
-
-						// some literal text
-						//allValues.push(new vscode.InlineValueText(varRange, `${varName}: ${viewport.start.line}`));
-
-						// value found via variable lookup
-						allValues.push(new vscode.InlineValueVariableLookup(varRange, varName, false));
-
-						// value determined via expression evaluation
-						//allValues.push(new vscode.InlineValueEvaluatableExpression(varRange, varName));
-					}
-				} while (m);
+				const regExp = /[⍺⍵]|⎕[A-Za-z]+|[A-Za-z_∆⍙][A-Za-z0-9_∆⍙]*/g;
+				let m: RegExpExecArray | null;
+				while ((m = regExp.exec(line.text)) !== null) {
+					const varName = m[0];
+					const varRange = new vscode.Range(l, m.index, l, m.index + varName.length);
+					allValues.push(new vscode.InlineValueVariableLookup(varRange, varName, false));
+				}
 			}
 
 			return allValues;

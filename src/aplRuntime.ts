@@ -93,8 +93,8 @@ export class AplRuntime extends EventEmitter {
 		startLine: number;
 	}[] = [];
 
-	// maps from sourceFile to APL name
-	private _linkMap = {};
+	// maps APL name → file path and file path → APL name
+	private _linkMap: Record<string, string> = {};
 
 	// since we want to send breakpoint events, we will assign an id to every event
 	// so that the frontend can match events with breakpoints.
@@ -224,7 +224,7 @@ export class AplRuntime extends EventEmitter {
 		.then(() => this._fileAccessor.readFile(this._link))
 		.then((data) => {
 			const json = new TextDecoder().decode(data);
-			const map = {};
+			const map: Record<string, string> = {};
 			this._linkInfo = JSON.parse(json).map((row: string[]) => {
 				const aplName = row[0][0] === '#' ? row[0] : `${row[1]}.${row[0]}`;
 				const filePath = Path.resolve(row[3]);
@@ -368,8 +368,11 @@ export class AplRuntime extends EventEmitter {
 	}
 
 	private _hadError = 0;
+	private _lastError: { dmx: number; error: number } | undefined;
+	public get lastError() { return this._lastError; }
 	private hadError(x: HadErrorMessage) {
 		this._hadError = x.error;
+		this._lastError = { dmx: x.dmx, error: x.error };
 	}
 
 	private gotoWindow(x: GotoWindowMessage) {

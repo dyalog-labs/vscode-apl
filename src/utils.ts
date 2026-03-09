@@ -81,6 +81,28 @@ export class PendingRequests<T> {
 export const normPath = (path: string) => path.replace(/^\w:/, m => m.toUpperCase());
 
 /**
+ * Validate an APL namespace name for use in Link commands.
+ * Prevents APL injection via crafted namespace strings.
+ * Valid: #, ⎕SE, #.MyNS, ⎕SE.Utils, MyNS.Sub (letters, digits, dots, # and ⎕ prefixes)
+ */
+export function isValidNamespace(ns: string): boolean {
+	return /^[#⎕]?[\w⎕.]*$/.test(ns) && ns.length > 0;
+}
+
+/**
+ * Inject a Content Security Policy meta tag into HTML content.
+ * Blocks network access while allowing inline scripts/styles for interpreter content.
+ */
+export function injectCSP(html: string): string {
+	const csp = `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:;`;
+	const cspTag = `<meta http-equiv="Content-Security-Policy" content="${csp}">`;
+	if (html.includes('<head>')) {
+		return html.replace('<head>', `<head>${cspTag}`);
+	}
+	return `<!DOCTYPE html><html><head>${cspTag}</head><body>${html}</body></html>`;
+}
+
+/**
  * Search the workspace for an APL source file matching the given name and open it.
  * Returns true if a file was found and opened, false otherwise.
  */

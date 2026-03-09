@@ -17,6 +17,7 @@ import { AplRuntime, IAplBreakpoint, FileAccessor } from './aplRuntime';
 import { ReplManager } from './replManager';
 import type { InterpreterStatusMessage, OpenWindowMessage, ReplyGetHelpInformationMessage, ShowHTMLMessage, ValueTipMessage } from './rideMessages';
 import { Subject } from 'await-notify';
+import { injectCSP } from './utils';
 
 // function timeout(ms: number) {
 // 	return new Promise(resolve => setTimeout(resolve, ms));
@@ -97,7 +98,7 @@ export class AplDebugSession extends LoggingDebugSession {
 				}
 			);
 		});
-		this._runtime.on('closeWindow', (opt: OpenWindowMessage) => {
+		this._runtime.on('closeWindow', (opt: { filename: string }) => {
 			this.sendEvent(new ContinuedEvent(AplDebugSession.threadID));
 		});
 		this._runtime.on('openWindow', (opt: OpenWindowMessage) => {
@@ -114,8 +115,7 @@ export class AplDebugSession extends LoggingDebugSession {
 				{}
 			);
 
-			// And set its HTML content
-			panel.webview.html = opt.html;
+			panel.webview.html = injectCSP(opt.html);
 		});
 		this._runtime.on('openHelp', (opt: ReplyGetHelpInformationMessage) => {
 				let html = vscode.Uri.parse(opt.url);
@@ -231,12 +231,20 @@ export class AplDebugSession extends LoggingDebugSession {
 		const session = args.replId
 			? manager.getTab(args.replId)?.session
 			: manager.activeSession;
+		if (!session) {
+			response.success = false;
+			response.message = args.replId
+				? `REPL tab '${args.replId}' is no longer available.`
+				: 'No active REPL session. Open a REPL tab first.';
+			this.sendResponse(response);
+			return;
+		}
 		if (args.replSuspended) {
 			// Attach to already-suspended session (auto-debug on error)
-			await this._runtime.attachToSuspendedSession(session!, args.cwd);
+			await this._runtime.attachToSuspendedSession(session, args.cwd);
 		} else {
 			// Attach to existing REPL session
-			await this._runtime.attachToSession(session!, args.program, args.cwd, !!args.stopOnEntry, !!args.noDebug);
+			await this._runtime.attachToSession(session, args.program, args.cwd, !!args.stopOnEntry, !!args.noDebug);
 		}
 
 		// If traceExpression is provided (from REPL Ctrl+Enter), execute it with tracing
@@ -307,16 +315,18 @@ export class AplDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
-	protected exceptionInfoRequest(response: DebugProtocol.ExceptionInfoResponse, args: DebugProtocol.ExceptionInfoArguments) {
+	protected async exceptionInfoRequest(response: DebugProtocol.ExceptionInfoResponse, args: DebugProtocol.ExceptionInfoArguments) {
+		const err = this._runtime.lastError;
+		const winId = this._runtime.winId;
+
+		// Query ⎕DM (Diagnostic Message) from the interpreter for the actual error text
+		const dm = await this._runtime.getValueTip('⎕DM', 0, this._toolTipSeq++, winId, 100, 100);
+		const message = dm?.tip?.join('\n') || 'Unknown error';
+
 		response.body = {
-			exceptionId: 'Exception ID',
-			description: 'This is a descriptive description of the exception.',
+			exceptionId: err ? `⎕EN ${err.error}` : 'Unknown',
+			description: message,
 			breakMode: 'always',
-			details: {
-				message: 'Message contained in the exception.',
-				typeName: 'Short type name of the exception object',
-				stackTrace: 'stack frame 1\nstack frame 2',
-			}
 		};
 		this.sendResponse(response);
 	}
@@ -403,7 +413,7 @@ export class AplDebugSession extends LoggingDebugSession {
 		}
 	}
 
-	private _varMap = {};
+	private _varMap: Record<number, number> = {};
 
 	/**
 	 * Parse local variable names from the current function header.

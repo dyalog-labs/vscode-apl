@@ -2,8 +2,8 @@ import * as vscode from 'vscode';
 import { AplSession, ConnectionState } from './aplSession';
 import { ReplManager } from './replManager';
 import { ReplBreakpointSync } from './replBreakpointSync';
-import { openAplDefinition } from './utils';
 import { updateStatusBar } from './activateAplDebug';
+import { openAplDefinition, isValidNamespace, injectCSP } from './utils';
 
 /**
  * A single REPL tab: owns an AplSession and accumulates output history.
@@ -550,6 +550,11 @@ export class ReplTab implements vscode.Disposable {
 		const parts = code.trim().split(/\s+/);
 		const namespace = parts[1] || '#';
 
+		if (!isValidNamespace(namespace)) {
+			this._appendOutput('error', `Invalid namespace: ${namespace}`);
+			return;
+		}
+
 		const workspaceFolders = vscode.workspace.workspaceFolders;
 		if (!workspaceFolders || workspaceFolders.length === 0) {
 			this._appendOutput('error', 'No workspace folder open.');
@@ -591,15 +596,7 @@ export class ReplTab implements vscode.Disposable {
 			{ enableScripts: true }
 		);
 
-		// Inject a strict CSP: allow inline scripts/styles for interpreter
-		// content but block all network access to prevent exfiltration.
-		const csp = `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:;`;
-		const cspTag = `<meta http-equiv="Content-Security-Policy" content="${csp}">`;
-		const safeHtml = html.includes('<head>')
-			? html.replace('<head>', `<head>${cspTag}`)
-			: `<!DOCTYPE html><html><head>${cspTag}</head><body>${html}</body></html>`;
-
-		htmlPanel.webview.html = safeHtml;
+		htmlPanel.webview.html = injectCSP(html);
 	}
 
 	public dispose(): void {

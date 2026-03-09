@@ -863,3 +863,42 @@ suite('AplRuntime — multiple windows', () => {
 		assert.strictEqual((runtime as any)._hasOpenWindows(), false);
 	});
 });
+
+// ─── Exception info ─────────────────────────────────────────────────
+
+suite('AplRuntime — exception info', () => {
+	let server: MockRideServer;
+	let session: AplSession;
+	let runtime: AplRuntime;
+
+	setup(async () => {
+		({ server, session, runtime } = await createTestRuntime());
+	});
+
+	teardown(() => teardownTestRuntime(session, server));
+
+	test('HadError stores last error info', async () => {
+		assert.strictEqual(runtime.lastError, undefined);
+
+		server.send('HadError', { dmx: 11, error: 1001 });
+		await new Promise(resolve => setTimeout(resolve, 50));
+
+		assert.deepStrictEqual(runtime.lastError, { dmx: 11, error: 1001 });
+	});
+
+	test('lastError persists after SetHighlightLine consumes _hadError', async () => {
+		server.send('OpenWindow', {
+			token: 1, name: 'Func', filename: 'func.aplf',
+			text: ['Func', '1÷0'], stop: [], trace: [], monitor: [],
+		});
+		await new Promise(resolve => setTimeout(resolve, 50));
+
+		server.send('HadError', { dmx: 11, error: 1001 });
+		server.send('SetHighlightLine', { win: 1, line: 1 });
+		await new Promise(resolve => setTimeout(resolve, 50));
+
+		// _hadError is consumed (reset to 0) but lastError persists
+		assert.strictEqual((runtime as any)._hadError, 0);
+		assert.deepStrictEqual(runtime.lastError, { dmx: 11, error: 1001 });
+	});
+});
