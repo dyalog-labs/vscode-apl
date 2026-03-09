@@ -22,7 +22,8 @@
 		"inlineSourceMap": false,
 		"preserveConstEnums": true,
 		"strictNullChecks": true,
-		"noUnusedParameters": false
+		"noUnusedParameters": false,
+		"types": ["mocha", "node"]
 	},
 	"exclude": [
 		"node_modules"

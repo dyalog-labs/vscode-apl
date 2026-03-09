@@ -36,11 +36,13 @@
     "build": "npm run -S esbuild-base -- --sourcemap --sources-content=false",
     "package": "vsce package",
     "vscode:prepublish": "rimraf dist && npm run -S esbuild-base -- --minify",
-    "test": "npm run typecheck"
+    "test": "npm run compile && npx mocha --ui tdd --require out/tests/helpers/register-vscode-stub.js --timeout 10000 out/tests/unit/*.test.js out/tests/integration/*.test.js",
+    "test:unit": "npm run compile && npx mocha --ui tdd --require out/tests/helpers/register-vscode-stub.js out/tests/unit/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@types/glob": "^7.2.0",
-    "@types/mocha": "^9.1.0",
+    "@types/mocha": "^9.1.1",
     "@types/node": "^14.14.37",
     "@types/vscode": "^1.66.0",
     "@typescript-eslint/eslint-plugin": "^5.17.0",
@@ -282,7 +284,11 @@
       "properties": {
         "apl.connectionTiming": {
           "type": "string",
-          "enum": ["onStart", "onDemand", "never"],
+          "enum": [
+            "onStart",
+            "onDemand",
+            "never"
+          ],
           "default": "onDemand",
           "enumDescriptions": [
             "Start Dyalog APL when an APL file is opened",
