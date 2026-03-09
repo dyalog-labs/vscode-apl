@@ -777,7 +777,7 @@ export class AplRuntime extends EventEmitter {
 			bp = { verified: false, line, id: this._breakpointId++ };
 			bps.push(bp);
 		}
-		this.setBreakPointOnFile(bps, filePath);
+		await this.setBreakPointOnFile(bps, filePath);
 		return bp;
 	}
 
@@ -787,17 +787,23 @@ export class AplRuntime extends EventEmitter {
 			return;
 		}
 		const normalizedPath = normPath(filePath);
+		const matched: IAplBreakpoint[] = [];
 		bps.forEach((bp) => {
 			const row = this._linkInfo.find((row) => normPath(row.filePath) === normalizedPath && row.startLine < bp.line);
 			if (row) {
 				const lines = fnbp[row.aplName] || [];
 				lines.push(bp.line - row.startLine);
 				fnbp[row.aplName] = lines;
+				matched.push(bp);
 			}
 		});
 		for (const aplName of Object.keys(fnbp)) {
 			const lines = fnbp[aplName].join(' ');
 			await this.exec(0, `{}${lines} ⎕STOP '${aplName}'`, 1);
+		}
+		for (const bp of matched) {
+			bp.verified = true;
+			this.sendEvent('breakpointValidated', bp);
 		}
 	}
 
