@@ -1,13 +1,12 @@
 {
-  "name": "apl-debug",
-  "displayName": "APL Debug",
-  "version": "0.1.4",
-  "publisher": "Tiamatica",
-  "description": "APL debug adapter for VS Code.",
+  "name": "vscode-apl",
+  "displayName": "APL for VS Code",
+  "version": "0.1.0",
+  "description": "APL VS Code integration.",
   "author": {
-    "email": "gil@tiamatica.com",
-    "name": "Gilgamesh Athoraya",
-    "url": "https://github.com/tiamatica"
+    "email": "martina.alice.crippa@gmail.com",
+    "name": "Martina Crippa",
+    "url": "https://github.com/martanit/vscode-apl"
   },
   "license": "MIT",
   "keywords": [
@@ -23,10 +22,10 @@
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/tiamatica/vscode-apl-debug.git"
+    "url": "https://github.com/martanit/vscode-apl.git"
   },
   "bugs": {
-    "url": "https://github.com/tiamatica/vscode-apl-debug/issues"
+    "url": "https://github.com/martanit/vscode-apl/issues"
   },
   "scripts": {
     "compile": "tsc -p ./",
@@ -36,8 +35,6 @@
     "watch": "npm run -S esbuild-base -- --sourcemap --sources-content=false --watch",
     "build": "npm run -S esbuild-base -- --sourcemap --sources-content=false",
     "package": "vsce package",
-    "publish": "vsce publish",
-    "publish-pre-release": "vsce publish --pre-release",
     "vscode:prepublish": "rimraf dist && npm run -S esbuild-base -- --minify",
     "test": "npm run typecheck"
   },

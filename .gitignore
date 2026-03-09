@@ -7,3 +7,4 @@ apl-debug.txt
 *.vsix
 .DS_Store
 link.json
+.claude/

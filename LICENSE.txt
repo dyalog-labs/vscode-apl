@@ -1,6 +1,5 @@
-Copyright (c) Tiamatica
-
-All rights reserved. 
+Copyright (c) 2025-2026 martanit
+Based on work by Tiamatica (https://github.com/tiamatica)
 
 MIT License
 
