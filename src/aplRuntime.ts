@@ -547,7 +547,7 @@ export class AplRuntime extends EventEmitter {
 	 */
 	public getSIStack(): Promise<IStack> {
 		if (this._siStack.pending) {
-			return this._siStack.create();
+			return this._siStack.promise!;
 		}
 		const promise = this._siStack.create();
 		this.send('GetSIStack', {});

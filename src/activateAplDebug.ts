@@ -412,20 +412,20 @@ export const workspaceFileAccessor: FileAccessor = {
 		return new Promise(function (resolve, reject) {
 			const startTS = +new Date();
 			const interval = Math.min(timeout, 100);
-			let stats: vscode.FileStat;
 			const uri = pathToUri(filePath);
 			const check = async () => {
-				if (timeout < +new Date() - startTS) {
-					reject(new Error('File did not exists and was not created during the timeout.'));
-				}
 				try {
-					stats = await vscode.workspace.fs.stat(uri);
-					clearTimeout(timer);
+					await vscode.workspace.fs.stat(uri);
 					resolve(true);
 				} catch (e) {
-				}					
-			}
-			const timer = setTimeout(check, interval);
+					if (timeout < +new Date() - startTS) {
+						reject(new Error('File did not exist and was not created during the timeout.'));
+					} else {
+						setTimeout(check, interval);
+					}
+				}
+			};
+			setTimeout(check, interval);
 		});
 	},
 	async deleteFile(filePath: string): Promise<void> {

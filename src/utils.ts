@@ -11,6 +11,7 @@ export class PendingRequest<T> {
 	private _timer?: ReturnType<typeof setTimeout>;
 
 	get pending(): boolean { return !!this._resolve; }
+	get promise(): Promise<T> | undefined { return this._promise; }
 
 	create(timeoutMs?: number): Promise<T> {
 		this._promise = new Promise<T>((resolve, reject) => {

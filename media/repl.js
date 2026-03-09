@@ -801,7 +801,9 @@
 				break;
 
 			case 'autocomplete':
-				showAutocomplete(message.options);
+				if (message.token === autocompleteToken) {
+					showAutocomplete(message.options);
+				}
 				break;
 
 			case 'valuetip':

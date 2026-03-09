@@ -549,11 +549,13 @@ export class AplDebugSession extends LoggingDebugSession {
 			const win = args.frameId || 0;
 			const token = request?.seq || win;
 			const column = 0;
-			const valueTip: ValueTipMessage = await this._runtime.getValueTip(args.expression, column, token, win);
-			const kind = this.classMap(valueTip.class);
-			response.body.result = valueTip.tip.join('\n');
-			response.body.type = kind;
-			response.body.presentationHint = { kind };
+			const valueTip = await this._runtime.getValueTip(args.expression, column, token, win);
+			if (valueTip && valueTip.tip) {
+				const kind = this.classMap(valueTip.class);
+				response.body.result = valueTip.tip.join('\n');
+				response.body.type = kind;
+				response.body.presentationHint = { kind };
+			}
 		}
 
 		this.sendResponse(response);
@@ -581,7 +583,7 @@ export class AplDebugSession extends LoggingDebugSession {
 
 	protected customRequest(command: string, response: DebugProtocol.Response, args: any) {
 		switch (command) {
-			case 'togglFormatting':
+			case 'toggleFormatting':
 				this._showHex = !this._showHex;
 				if (this._useInvalidatedEvent) {
 					this.sendEvent(new InvalidatedEvent(['variables']));
