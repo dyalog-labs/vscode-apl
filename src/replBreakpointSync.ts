@@ -45,12 +45,8 @@ export class ReplBreakpointSync implements vscode.Disposable {
 		this._disposables.push(
 			vscode.debug.onDidTerminateDebugSession(session => {
 				if (session.type === 'apl') {
-					// Only clear flag if no other APL debug session is still active
-					const hasOther = vscode.debug.activeDebugSession?.type === 'apl';
-					if (!hasOther) {
-						this._debugSessionActive = false;
-						this._syncAllBreakpoints();
-					}
+					this._debugSessionActive = false;
+					this.refreshLinkInfo();
 				}
 			})
 		);
@@ -83,7 +79,7 @@ export class ReplBreakpointSync implements vscode.Disposable {
 		if (this._session?.isConnected) {
 			await this._loadLinkInfo();
 			if (!this._debugSessionActive) {
-				await this._syncAllBreakpoints();
+				this._syncAllBreakpoints();
 			}
 		}
 	}
@@ -233,30 +229,34 @@ export class ReplBreakpointSync implements vscode.Disposable {
 		);
 
 		// Clear stops on functions that no longer have breakpoints
+		// Use error guard (0::⍬) to skip non-stoppable items (namespaces, classes)
 		for (const aplName of allFunctions) {
 			if (!fnbp[aplName]) {
-				this._session.execute(`{}⍬ ⎕STOP '${aplName}'`);
+				this._session.execute(`{0::⍬ ⋄ ⍬ ⎕STOP ⍵}'${aplName}'`);
 			}
 		}
 
 		// Set stops on functions that have breakpoints
 		for (const aplName of Object.keys(fnbp)) {
 			const lines = fnbp[aplName].join(' ');
-			this._session.execute(`{}${lines} ⎕STOP '${aplName}'`);
+			this._session.execute(`{0::⍬ ⋄ ${lines} ⎕STOP ⍵}'${aplName}'`);
 		}
 	}
 
 	private _syncAllBreakpoints(): void {
 		if (!this._session?.isConnected || !this._linkInfoLoaded) { return; }
 
-		const affectedFiles = new Set<string>();
+		// Include all linked files so stale ⎕STOP from debug sessions get cleared
+		const allFiles = new Set(
+			this._linkInfo.map(r => normPath(r.filePath))
+		);
 		for (const bp of vscode.debug.breakpoints) {
 			if (bp instanceof vscode.SourceBreakpoint) {
-				affectedFiles.add(normPath(bp.location.uri.fsPath));
+				allFiles.add(normPath(bp.location.uri.fsPath));
 			}
 		}
 
-		for (const filePath of affectedFiles) {
+		for (const filePath of allFiles) {
 			this._syncBreakpointsForFile(filePath);
 		}
 	}
