@@ -213,6 +213,26 @@ suite('AplSession — message framing', () => {
 		server.stop();
 	});
 
+	test('handles large messages requiring buffer growth', async () => {
+		const readyPromise = new Promise<void>(resolve => {
+			session.once('ready', resolve);
+		});
+		await session.connect('127.0.0.1', server.port);
+		await readyPromise;
+
+		const outputs: string[] = [];
+		session.on('output', (text: string) => outputs.push(text));
+
+		// Send a large output message (100KB of data)
+		const largeContent = 'x'.repeat(100000) + '\n';
+		server.send('AppendSessionOutput', { result: largeContent });
+
+		await new Promise(resolve => setTimeout(resolve, 200));
+
+		const allOutput = outputs.join('');
+		assert.ok(allOutput.length >= 100000, `should receive large output, got ${allOutput.length} chars`);
+	});
+
 	test('handles multiple messages in one TCP chunk', async () => {
 		const readyPromise = new Promise<void>(resolve => {
 			session.once('ready', resolve);

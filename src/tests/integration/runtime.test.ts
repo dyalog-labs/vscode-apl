@@ -886,6 +886,17 @@ suite('AplRuntime — exception info', () => {
 		assert.deepStrictEqual(runtime.lastError, { dmx: 11, error: 1001 });
 	});
 
+	test('HadError stores last error info with different error codes', async () => {
+		server.send('HadError', { dmx: 5, error: 500 });
+		await new Promise(resolve => setTimeout(resolve, 50));
+		assert.deepStrictEqual(runtime.lastError, { dmx: 5, error: 500 });
+
+		// Overwrite with new error
+		server.send('HadError', { dmx: 99, error: 2000 });
+		await new Promise(resolve => setTimeout(resolve, 50));
+		assert.deepStrictEqual(runtime.lastError, { dmx: 99, error: 2000 });
+	});
+
 	test('lastError persists after SetHighlightLine consumes _hadError', async () => {
 		server.send('OpenWindow', {
 			token: 1, name: 'Func', filename: 'func.aplf',
@@ -900,5 +911,54 @@ suite('AplRuntime — exception info', () => {
 		// _hadError is consumed (reset to 0) but lastError persists
 		assert.strictEqual((runtime as any)._hadError, 0);
 		assert.deepStrictEqual(runtime.lastError, { dmx: 11, error: 1001 });
+	});
+});
+
+// ─── exec() timeout ─────────────────────────────────────────────────
+
+suite('AplRuntime — exec timeout', () => {
+	let server: MockRideServer;
+	let session: AplSession;
+	let runtime: AplRuntime;
+
+	setup(async () => {
+		({ server, session, runtime } = await createTestRuntime());
+	});
+
+	teardown(() => teardownTestRuntime(session, server));
+
+	test('exec with awaitEcho resolves normally when echo is received', async () => {
+		// Default mock auto-responds with EchoInput — this should resolve quickly
+		await (runtime as any).exec(0, '1+1', 1);
+		// No hang = pass
+	});
+
+	test('exec with awaitEcho resolves on timeout when echo is suppressed', async () => {
+		// Use a short timeout so this test is fast
+		(runtime as any)._execTimeoutMs = 200;
+
+		// Suppress the echo so timeout kicks in
+		server.onCommand('Execute', () => {
+			// Don't send EchoInput — simulate interpreter not responding
+		});
+
+		const start = Date.now();
+		await (runtime as any).exec(0, 'hung_command', 1);
+		const elapsed = Date.now() - start;
+
+		// Should have timed out (~200ms) rather than hung forever
+		assert.ok(elapsed >= 150, `should have waited for timeout, took ${elapsed}ms`);
+		assert.ok(elapsed < 2000, `should not have hung, took ${elapsed}ms`);
+	});
+
+	test('exec without awaitEcho resolves immediately', async () => {
+		// Suppress echo to prove we don't wait
+		server.onCommand('Execute', () => {});
+
+		const start = Date.now();
+		await (runtime as any).exec(0, '1+1');
+		const elapsed = Date.now() - start;
+
+		assert.ok(elapsed < 100, `should resolve immediately, took ${elapsed}ms`);
 	});
 });

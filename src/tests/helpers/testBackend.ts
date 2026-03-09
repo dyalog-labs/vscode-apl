@@ -26,6 +26,15 @@ export interface TestBackend {
 	 */
 	defineFunction(name: string, text: string[]): Promise<{ filePath: string; startLine: number }>;
 
+	/**
+	 * Execute an APL expression and collect output.
+	 * Returns the concatenated AppendSessionOutput text.
+	 *
+	 * Mock: collects from the auto-respond echo.
+	 * Dyalog: executes for real and waits for SetPromptType.
+	 */
+	execute(expression: string): Promise<string>;
+
 	/** Tear down the backend, disconnect, clean up. */
 	teardown(): Promise<void>;
 }
@@ -70,6 +79,20 @@ export class MockBackend implements TestBackend {
 		});
 
 		return new MockBackend(server, session, runtime);
+	}
+
+	async execute(expression: string): Promise<string> {
+		return new Promise<string>((resolve) => {
+			let output = '';
+			const handler = (text: string) => { output += text; };
+			this.runtime.on('output', handler);
+			// Wait for the mock's auto-respond cycle
+			setTimeout(() => {
+				this.runtime.removeListener('output', handler);
+				resolve(output);
+			}, 100);
+			this.runtime.execute(expression);
+		});
 	}
 
 	async defineFunction(name: string, _text: string[]): Promise<{ filePath: string; startLine: number }> {
@@ -160,6 +183,33 @@ export class DyalogBackend implements TestBackend {
 		await backend._exec(')clear');
 
 		return backend;
+	}
+
+	async execute(expression: string): Promise<string> {
+		return new Promise<string>((resolve) => {
+			let output = '';
+			const origHandler = (this.session as any)._debugHandler;
+			let resolved = false;
+			const done = () => {
+				if (resolved) return;
+				resolved = true;
+				this.session.setDebugHandler(origHandler);
+				clearTimeout(timer);
+				resolve(output);
+			};
+			const wrappedHandler = (command: string, args: any) => {
+				if (origHandler) origHandler(command, args);
+				if (command === 'AppendSessionOutput') {
+					output += args.result;
+				}
+				if (command === 'SetPromptType' && args.type > 0) {
+					done();
+				}
+			};
+			this.session.setDebugHandler(wrappedHandler);
+			const timer = setTimeout(done, 10000);
+			this.session.execute(expression);
+		});
 	}
 
 	async defineFunction(name: string, text: string[]): Promise<{ filePath: string; startLine: number }> {

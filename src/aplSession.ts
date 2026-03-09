@@ -343,7 +343,8 @@ export class AplSession extends EventEmitter {
 		this._client?.on('data', (data) => {
 			// Grow buffer if needed
 			if (bufferLength + data.length > buffer.length) {
-				const newBuffer = Buffer.alloc(2 ** Math.ceil(Math.log(bufferLength + data.length) / Math.log(2)));
+				const needed = bufferLength + data.length;
+				const newBuffer = Buffer.alloc(Math.max(needed, 0x100000, 2 ** Math.ceil(Math.log2(needed))));
 				buffer.copy(newBuffer, 0, bufferOffset, bufferOffset + bufferLength);
 				bufferOffset = 0;
 				buffer = newBuffer;

@@ -5,7 +5,6 @@
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as Path from 'path';
-import { Subject } from 'await-notify';
 import { AplSession } from './aplSession';
 import { normPath, PendingRequest, PendingRequests } from './utils';
 import type {
@@ -115,7 +114,8 @@ export class AplRuntime extends EventEmitter {
 	public get currentWindow(): OpenWindowMessage | undefined { return this._windows[this._winId]; }
 
 	private _executeText = '';
-	private _echoReceived = new Subject();
+	private _echoReceived = new PendingRequest<void>();
+	private _execTimeoutMs = 10000;
 	private _windows: OpenWindowMessage[] = [];
 
 
@@ -317,9 +317,10 @@ export class AplRuntime extends EventEmitter {
 	private async exec(trace: number, expression: string, awaitEcho?: number) {
 		const text = `${expression}\n`;
 		this._executeText = text;
+		const echoPromise = awaitEcho ? this._echoReceived.create(this._execTimeoutMs) : undefined;
 		this.send('Execute', { trace, text });
-		if (awaitEcho) {
-			await this._echoReceived.wait();
+		if (echoPromise) {
+			await echoPromise;
 		}
 	}
 
@@ -360,7 +361,7 @@ export class AplRuntime extends EventEmitter {
 
 	private echoInput(x: EchoInputMessage) {
 		if (x.input === this._executeText) {
-			this._echoReceived.notifyAll();
+			this._echoReceived.resolve(undefined);
 		}
 	}
 

@@ -82,6 +82,36 @@ for (const backendType of getBackends()) {
 			// Should not throw — just sends the command
 			await (backend.runtime as any).exec(0, '1+1', 1);
 		});
+
+		test('execute produces output', async () => {
+			const output = await backend.execute('2+3');
+			assert.ok(output.length > 0, `should produce output, got: "${output}"`);
+			if (backend.type === 'dyalog') {
+				// Real Dyalog should return "5"
+				assert.ok(output.trim().includes('5'), `expected output containing "5", got: "${output.trim()}"`);
+			}
+		});
+
+		test('execute expression with assignment produces no output', async () => {
+			const output = await backend.execute('X←42');
+			if (backend.type === 'dyalog') {
+				assert.strictEqual(output.trim(), '', 'assignment should produce no output');
+			}
+		});
+
+		test('define and call function produces correct output', async () => {
+			await backend.defineFunction('Double', [
+				'r←Double x',
+				'r←x×2',
+			]);
+			const output = await backend.execute('Double 7');
+			if (backend.type === 'dyalog') {
+				assert.ok(output.trim().includes('14'), `expected 14, got: "${output.trim()}"`);
+			} else {
+				// Mock: just verify we get some output
+				assert.ok(output.length > 0);
+			}
+		});
 	});
 
 	suite(`Autocomplete (${backendType})`, () => {
