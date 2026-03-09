@@ -22,6 +22,18 @@ import type {
 	WindowTypeChangedMessage,
 } from './rideMessages';
 
+/**
+ * Parse a stack frame description in `name[line]` format.
+ * Returns the function name and line offset within the function.
+ */
+export function parseStackDescription(description: string): { name: string; lineOffset: number } {
+	const m = /(.*)\[(\d+)\]/.exec(description);
+	if (!m) {
+		return { name: description || '', lineOffset: 0 };
+	}
+	return { name: m[1], lineOffset: +m[2] };
+}
+
 export interface FileAccessor {
 	isWindows: boolean;
 	checkExists(filePath: string, timeout: number): Promise<boolean>;
@@ -469,13 +481,13 @@ export class AplRuntime extends EventEmitter {
 	private replyGetSIStack(x: ReplyGetSIStackMessage) {
 		this.log('getSIStack');
 		const frames: IStackFrame[] = x.stack.map((s, i) => {
-			const m = /(.*?)\[(\d+)\]/.exec(s.description) || [];
-			const file = this._linkMap[m[1]];
+			const { name, lineOffset } = parseStackDescription(s.description);
+			const file = this._linkMap[name];
 			return {
 				index: i,
-				name: m[1],
+				name,
 				file: s.filename || file,
-				line: s.fileline + +m[2],
+				line: s.fileline + lineOffset,
 			};
 		});
 		this._siStack.resolve({
@@ -787,7 +799,7 @@ export class AplRuntime extends EventEmitter {
 		const normalizedPath = normPath(filePath);
 		const matched: IAplBreakpoint[] = [];
 		bps.forEach((bp) => {
-			const row = this._linkInfo.find((row) => normPath(row.filePath) === normalizedPath && row.startLine < bp.line);
+			const row = this._linkInfo.find((row) => normPath(row.filePath) === normalizedPath && row.startLine <= bp.line);
 			if (row) {
 				const lines = fnbp[row.aplName] || [];
 				lines.push(bp.line - row.startLine);
@@ -824,13 +836,13 @@ export class AplRuntime extends EventEmitter {
 	/*
 	 * Clear all breakpoints for file.
 	 */
-	public clearBreakpoints(path: string): void {
+	public async clearBreakpoints(path: string): Promise<void> {
 		const filePath = normPath(path);
 		this._breakPoints.delete(filePath);
 		// Clear stops on ALL functions in this file, not just one
 		for (const row of this._linkInfo) {
 			if (normPath(row.filePath) === filePath) {
-				this.exec(0, `{}⍬ ⎕STOP '${row.aplName}'`);
+				await this.exec(0, `{}⍬ ⎕STOP '${row.aplName}'`, 1);
 			}
 		}
 	}

@@ -212,7 +212,7 @@ export class ReplBreakpointSync implements vscode.Disposable {
 		for (const bp of vscBps) {
 			const line = bp.location.range.start.line; // 0-based
 			const row = this._linkInfo.find(
-				r => normPath(r.filePath) === normalizedPath && r.startLine < line
+				r => normPath(r.filePath) === normalizedPath && r.startLine <= line
 			);
 			if (row) {
 				const lines = fnbp[row.aplName] || [];

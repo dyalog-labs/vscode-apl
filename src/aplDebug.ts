@@ -269,7 +269,7 @@ export class AplDebugSession extends LoggingDebugSession {
 		const clientLines = args.lines || [];
 
 		// clear all breakpoints for this file
-		this._runtime.clearBreakpoints(path);
+		await this._runtime.clearBreakpoints(path);
 
 		// set and verify breakpoint locations
 		const actualBreakpoints0 = clientLines.map(async l => {
