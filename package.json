@@ -38,6 +38,7 @@
     "vscode:prepublish": "rimraf dist && npm run -S esbuild-base -- --minify",
     "test": "npm run compile && npx mocha --ui tdd --require out/tests/helpers/register-vscode-stub.js --timeout 10000 out/tests/unit/*.test.js out/tests/integration/*.test.js",
     "test:unit": "npm run compile && npx mocha --ui tdd --require out/tests/helpers/register-vscode-stub.js out/tests/unit/*.test.js",
+    "test:dyalog": "npm run compile && DYALOG_TESTS=1 npx mocha --ui tdd --require out/tests/helpers/register-vscode-stub.js --timeout 30000 out/tests/unit/*.test.js out/tests/integration/*.test.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
