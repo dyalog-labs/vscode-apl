@@ -39,7 +39,7 @@
     "test": "npm run compile && npx mocha --ui tdd --require out/tests/helpers/register-vscode-stub.js --timeout 10000 out/tests/unit/*.test.js out/tests/integration/*.test.js",
     "test:unit": "npm run compile && npx mocha --ui tdd --require out/tests/helpers/register-vscode-stub.js out/tests/unit/*.test.js",
     "test:dyalog": "npm run compile && DYALOG_TESTS=1 npx mocha --ui tdd --require out/tests/helpers/register-vscode-stub.js --timeout 30000 out/tests/unit/*.test.js out/tests/integration/*.test.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "test:e2e": "npm run build && npm run compile && vscode-test"
   },
   "devDependencies": {
     "@types/glob": "^7.2.0",
@@ -50,6 +50,8 @@
     "@typescript-eslint/parser": "^5.17.0",
     "@vscode/debugadapter": "^1.56.0",
     "@vscode/debugadapter-testsupport": "^1.56.0",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
     "await-notify": "^1.0.1",
     "base64-js": "^1.5.1",
     "esbuild": "^0.14.29",
