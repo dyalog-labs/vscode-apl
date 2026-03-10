@@ -405,8 +405,6 @@ export class AplRuntime extends EventEmitter {
 		if (this._hadError === 1001) {
 			this.sendEvent('stopOnBreakpoint');
 			this._hadError = 0;
-		// } else if (x.line === 0) {
-		// 	this.sendEvent('stopOnEntry');
 		} else {
 			this.sendEvent('stopOnStep');
 		}
@@ -471,7 +469,7 @@ export class AplRuntime extends EventEmitter {
 	private replyGetSIStack(x: ReplyGetSIStackMessage) {
 		this.log('getSIStack');
 		const frames: IStackFrame[] = x.stack.map((s, i) => {
-			const m = /(.*)\[(\d+)\]/.exec(s.description) || [];
+			const m = /(.*?)\[(\d+)\]/.exec(s.description) || [];
 			const file = this._linkMap[m[1]];
 			return {
 				index: i,
