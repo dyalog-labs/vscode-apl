@@ -16,6 +16,10 @@ import { handleHelp } from './aplHelp';
 
 let aplStatusBarItem: vscode.StatusBarItem;
 
+export function updateStatusBar(text: string): void {
+	aplStatusBarItem.text = text;
+}
+
 export function activateAplDebug(context: vscode.ExtensionContext) {
 
 	// create a new status bar item that we can now manage

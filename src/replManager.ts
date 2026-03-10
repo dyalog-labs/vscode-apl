@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { AplSession } from './aplSession';
 import { ReplTab } from './replTab';
+import { updateStatusBar } from './activateAplDebug';
 
 /**
  * Manages all REPL tabs. Singleton accessible from both
@@ -93,6 +94,7 @@ export class ReplManager implements vscode.Disposable {
 			this._activeTabId = this._tabOrder.length > 0
 				? this._tabOrder[this._tabOrder.length - 1]
 				: undefined;
+			updateStatusBar(this.activeTab?.lastStatusText || '');
 		}
 
 		this._onTabsChanged?.();
@@ -124,6 +126,7 @@ export class ReplManager implements vscode.Disposable {
 			this._tabs.get(this._activeTabId)?.deactivate();
 		}
 		this._activeTabId = replId;
+		updateStatusBar(this._tabs.get(replId)?.lastStatusText || '');
 		this._onTabsChanged?.();
 	}
 

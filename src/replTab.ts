@@ -3,6 +3,7 @@ import { AplSession, ConnectionState } from './aplSession';
 import { ReplManager } from './replManager';
 import { ReplBreakpointSync } from './replBreakpointSync';
 import { openAplDefinition } from './utils';
+import { updateStatusBar } from './activateAplDebug';
 
 /**
  * A single REPL tab: owns an AplSession and accumulates output history.
@@ -21,6 +22,7 @@ export class ReplTab implements vscode.Disposable {
 	private _debugSession?: vscode.DebugSession;
 	private _isDebugMode = false;
 	private _breakpointSync = new ReplBreakpointSync();
+	private _lastStatusText = '';
 
 	/** Set by the view provider when this tab is active; undefined when background. */
 	private _postMessage?: (message: any) => void;
@@ -56,8 +58,9 @@ export class ReplTab implements vscode.Disposable {
 		return this._session.state;
 	}
 
-	public get isLinked(): boolean {
-		return this._breakpointSync.isLinked;
+
+	public get lastStatusText(): string {
+		return this._lastStatusText;
 	}
 
 	/** Called by the view provider when this tab becomes active. */
@@ -95,6 +98,10 @@ export class ReplTab implements vscode.Disposable {
 		this._session.on('end', () => {
 			this._breakpointSync.detachFromSession();
 			this._appendOutput('system', 'Session ended.');
+			this._lastStatusText = '';
+			if (this._manager.activeTab === this) {
+				updateStatusBar('');
+			}
 		});
 
 		this._session.on('error', (error: Error) => {
@@ -111,6 +118,13 @@ export class ReplTab implements vscode.Disposable {
 
 		this._session.on('suspended', () => {
 			this._handleAutoDebug();
+		});
+
+		this._session.on('status', (args: any) => {
+			this._lastStatusText = `&: ${args.NumThreads} | ⎕DQ: ${args.DQ} | ⎕SI: ${args.SI} | ⎕IO: ${args.IO} | ⎕ML: ${args.ML}`;
+			if (this._manager.activeTab === this) {
+				updateStatusBar(this._lastStatusText);
+			}
 		});
 	}
 
