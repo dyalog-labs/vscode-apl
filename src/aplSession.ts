@@ -515,7 +515,7 @@ export class AplSession extends EventEmitter {
 				break;
 
 			case 'ReplyGetAutocomplete':
-				this.emit('autocomplete', args.options, args.token);
+				this.emit('autocomplete', args.options, args.skip, args.token);
 				break;
 
 			case 'Disconnect':

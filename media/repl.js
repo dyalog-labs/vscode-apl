@@ -22,6 +22,7 @@
 	let autocompleteDropdown = null;
 	let autocompleteIndex = -1;
 	let autocompleteOptions = [];
+	let autocompleteSkip = 0;
 
 	// Backtick prefix mode state
 	let prefixMode = false;
@@ -471,9 +472,11 @@
 		});
 	}
 
-	function showAutocomplete(options) {
+	function showAutocomplete(options, skip) {
 		dismissAutocomplete();
 		if (!options || options.length === 0) return;
+
+		autocompleteSkip = skip;
 
 		// If single option, insert it directly
 		if (options.length === 1) {
@@ -537,11 +540,8 @@
 	function insertCompletion(text) {
 		const pos = inputEl.selectionStart;
 		const value = inputEl.value;
-		// Find the start of the current token (word boundary)
-		let start = pos;
-		while (start > 0 && /[A-Za-z0-9_⍺⍵∆⍙⎕#.]/.test(value[start - 1])) {
-			start--;
-		}
+		// Use skip from the interpreter to determine how many characters to replace
+		const start = pos - (autocompleteSkip || 0);
 		inputEl.value = value.slice(0, start) + text + value.slice(pos);
 		const newPos = start + text.length;
 		inputEl.selectionStart = inputEl.selectionEnd = newPos;
@@ -802,7 +802,7 @@
 
 			case 'autocomplete':
 				if (message.token === autocompleteToken) {
-					showAutocomplete(message.options);
+					showAutocomplete(message.options, message.skip);
 				}
 				break;
 

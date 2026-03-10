@@ -56,6 +56,10 @@ export class ReplTab implements vscode.Disposable {
 		return this._session.state;
 	}
 
+	public get isLinked(): boolean {
+		return this._breakpointSync.isLinked;
+	}
+
 	/** Called by the view provider when this tab becomes active. */
 	public activate(postMessage: (message: any) => void): void {
 		this._postMessage = postMessage;
@@ -97,8 +101,8 @@ export class ReplTab implements vscode.Disposable {
 			this._appendOutput('error', `Error: ${error.message}`);
 		});
 
-		this._session.on('autocomplete', (options: string[], token: number) => {
-			this._postMessage?.({ command: 'autocomplete', options, token });
+		this._session.on('autocomplete', (options: string[], skip: number, token: number) => {
+			this._postMessage?.({ command: 'autocomplete', options, skip, token });
 		});
 
 		this._session.on('showHtml', (args: { title: string; html: string }) => {

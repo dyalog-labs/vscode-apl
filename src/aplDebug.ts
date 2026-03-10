@@ -566,9 +566,10 @@ export class AplDebugSession extends LoggingDebugSession {
 	protected completionsRequest(response: DebugProtocol.CompletionsResponse, args: DebugProtocol.CompletionsArguments): void {
 
 		this._runtime.getAutocomplete(args.text, args.column - 1, 0)
-			.then((items) => {
+			.then(({ options, skip }) => {
+				const start = args.column - skip;
 				response.body = {
-					targets: items.map(label => ({ label }))
+					targets: options.map(label => ({ label, start, length: skip }))
 				};
 				this.sendResponse(response);
 			});

@@ -369,7 +369,7 @@ export class AplRuntime extends EventEmitter {
 	}
 	
 	private replyGetAutocomplete(x: ReplyGetAutocompleteMessage) {
-		this._autocompletion.resolve(x.options);
+		this._autocompletion.resolve({ options: x.options, skip: x.skip });
 	}
 
 	private replyGetHelpInformation(x: ReplyGetHelpInformationMessage) {
@@ -531,11 +531,11 @@ export class AplRuntime extends EventEmitter {
 		this.exec(1, expr);
 	}
 
-	private _autocompletion = new PendingRequest<string[]>();
+	private _autocompletion = new PendingRequest<{ options: string[]; skip: number }>();
 	/**
 	 * Get autocomplete
 	 */
-	public getAutocomplete(line: string, pos: number, token: number): Promise<string[]> {
+	public getAutocomplete(line: string, pos: number, token: number): Promise<{ options: string[]; skip: number }> {
 		const promise = this._autocompletion.create();
 		this.send('GetAutocomplete', { line, pos, token });
 		return promise;
