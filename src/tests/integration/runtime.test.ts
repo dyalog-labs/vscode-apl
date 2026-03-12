@@ -598,8 +598,8 @@ suite('AplRuntime — autocomplete', () => {
 			});
 		});
 
-		const options = await runtime.getAutocomplete('⎕', 1, 42);
-		assert.deepStrictEqual(options, ['⎕IO', '⎕CT', '⎕PP']);
+		const result = await runtime.getAutocomplete('⎕', 1, 42);
+		assert.deepStrictEqual(result.options, ['⎕IO', '⎕CT', '⎕PP']);
 	});
 });
 

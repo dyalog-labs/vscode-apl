@@ -214,19 +214,21 @@ export class DyalogBackend implements TestBackend {
 
 	async defineFunction(name: string, text: string[]): Promise<{ filePath: string; startLine: number }> {
 		const filePath = path.join(this._tempDir, `${name}.aplf`);
-		fs.writeFileSync(filePath, text.join('\n') + '\n');
 
 		if (!this._linked) {
 			// Write file first, then Link — so Link discovers it on initial scan
+			fs.writeFileSync(filePath, text.join('\n') + '\n');
 			await this._exec(`⎕SE.Link.Create '#' '${this._tempDir.replace(/\\/g, '/')}'`);
 			this._linked = true;
+		} else {
+			// Link's file watcher doesn't fire while a RIDE client is connected.
+			// Explicitly ⎕FIX the file (no watcher loop risk since watcher is inactive).
+			fs.writeFileSync(filePath, text.join('\n') + '\n');
+			const fixPath = filePath.replace(/\\/g, '/');
+			await this._exec(`2 ⎕FIX 'file://${fixPath}'`);
 		}
-		// Link's file watcher auto-fixes new files in the linked directory
 
-		// Use the same mechanism as the extension: 5177⌶ → link.json → parse
 		await (this.runtime as any).getLinkInfo();
-
-		// Find this function's entry in linkInfo
 		const info = (this.runtime as any)._linkInfo.find(
 			(r: any) => r.aplName === name || r.aplName === `#.${name}`
 		);

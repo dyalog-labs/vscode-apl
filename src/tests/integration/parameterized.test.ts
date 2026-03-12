@@ -126,9 +126,9 @@ for (const backendType of getBackends()) {
 		});
 
 		test('getAutocomplete returns results', async () => {
-			const results = await backend.runtime.getAutocomplete('⎕', 1, 0);
-			assert.ok(Array.isArray(results), 'should return an array');
-			assert.ok(results.length > 0, 'should have at least one completion');
+			const result = await backend.runtime.getAutocomplete('⎕', 1, 0);
+			assert.ok(Array.isArray(result.options), 'should return an array');
+			assert.ok(result.options.length > 0, 'should have at least one completion');
 		});
 	});
 
