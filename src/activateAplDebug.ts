@@ -4,6 +4,9 @@
 
 'use strict';
 
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { WorkspaceFolder, DebugConfiguration, ProviderResult, CancellationToken } from 'vscode';
 import { AplDebugSession } from './aplDebug';
@@ -18,6 +21,111 @@ let aplStatusBarItem: vscode.StatusBarItem;
 
 export function updateStatusBar(text: string): void {
 	aplStatusBarItem.text = text;
+}
+
+const MAX_DYALOG_VERSION = 20;
+
+interface DyalogConnection {
+	name?: string;
+	type?: string;
+	subtype?: string;
+	exe?: string;
+	port?: string;
+	host?: string;
+	args?: string;
+	preset?: boolean;
+}
+
+/**
+ * Return the platform-specific directory where Dyalog/RIDE store per-version config.
+ * macOS:  ~/Library/Application Support/
+ * Linux:  ~/.config/
+ * Windows: %APPDATA%
+ */
+function getAppDataDir(): string | undefined {
+	if (process.platform === 'darwin') {
+		return path.join(os.homedir(), 'Library', 'Application Support');
+	} else if (process.platform === 'win32') {
+		return process.env['APPDATA'];
+	} else {
+		return path.join(os.homedir(), '.config');
+	}
+}
+
+/**
+ * Find the connections.json from the latest installed Dyalog version
+ * (capped at MAX_DYALOG_VERSION). Scans Dyalog-{version} directories.
+ */
+function findConnectionsFile(): string | undefined {
+	const appData = getAppDataDir();
+	if (!appData || !fs.existsSync(appData)) {
+		return undefined;
+	}
+
+	try {
+		const entries = fs.readdirSync(appData);
+		let bestVersion = 0;
+		let bestPath: string | undefined;
+
+		for (const entry of entries) {
+			const match = entry.match(/^Dyalog-(\d+(?:\.\d+)?)$/);
+			if (!match) { continue; }
+			const version = parseFloat(match[1]);
+			if (version > MAX_DYALOG_VERSION) { continue; }
+			if (version <= bestVersion) { continue; }
+
+			const connFile = path.join(appData, entry, 'connections.json');
+			if (fs.existsSync(connFile)) {
+				bestVersion = version;
+				bestPath = connFile;
+			}
+		}
+		return bestPath;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Read Dyalog connections and map them to VS Code debug configurations.
+ */
+function getDyalogDebugConfigs(): DebugConfiguration[] {
+	const connFile = findConnectionsFile();
+	if (!connFile) {
+		return [];
+	}
+
+	try {
+		const raw = fs.readFileSync(connFile, 'utf8');
+		const connections: DyalogConnection[] = JSON.parse(raw);
+		const configs: DebugConfiguration[] = [];
+
+		for (const conn of connections) {
+			if (!conn.name) { continue; }
+
+			if (conn.type === 'start' && conn.exe) {
+				configs.push({
+					type: 'apl',
+					request: 'launch',
+					name: conn.name.trim(),
+					exe: conn.exe,
+					program: '${file}',
+				});
+			} else if (conn.port) {
+				configs.push({
+					type: 'apl',
+					request: 'launch',
+					name: conn.name.trim(),
+					host: conn.host || '127.0.0.1',
+					port: parseInt(conn.port, 10),
+					program: '${file}',
+				});
+			}
+		}
+		return configs;
+	} catch {
+		return [];
+	}
 }
 
 export function activateAplDebug(context: vscode.ExtensionContext) {
@@ -258,7 +366,12 @@ export function activateAplDebug(context: vscode.ExtensionContext) {
 
 	// register a dynamic configuration provider for 'apl' debug type
 	context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('apl', {
-		provideDebugConfigurations(folder: WorkspaceFolder | undefined): ProviderResult<DebugConfiguration[]> {
+		provideDebugConfigurations(_folder: WorkspaceFolder | undefined): ProviderResult<DebugConfiguration[]> {
+			const dyalogConfigs = getDyalogDebugConfigs();
+			if (dyalogConfigs.length > 0) {
+				return dyalogConfigs;
+			}
+			// Fallback when no Dyalog connections.json found
 			return [
 				{
 					name: "APL Launch",
@@ -349,7 +462,14 @@ class AplConfigurationProvider implements vscode.DebugConfigurationProvider {
 			const tab = manager.getTab(replId)!;
 			vscode.commands.executeCommand('aplRepl.focus');
 			try {
-				await tab.handleConnect();
+				// Use exe/host/port from config if provided, otherwise fall back to handleConnect()
+				if (config.port) {
+					await tab.session.connect(config.host || '127.0.0.1', config.port);
+				} else if (config.exe) {
+					await tab.session.spawn(config.exe);
+				} else {
+					await tab.handleConnect();
+				}
 				// Wait for the interpreter to be fully ready (SetPromptType)
 				if (!tab.session.isConnected || tab.session.state !== 'connected') {
 					await new Promise<void>((resolve, reject) => {
