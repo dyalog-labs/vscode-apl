@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as Path from 'path';
 import * as cp from 'child_process';
+import { findDyalogDir as findDyalogDirBase } from './findDyalog';
 
 /**
  * Mapping from APL glyphs to their documentation page paths
@@ -178,39 +179,14 @@ let extractedPath: string | undefined;
 
 /**
  * Find the Dyalog installation directory (containing dyalog.exe).
+ * Checks user-configured path first, then falls back to auto-detection.
  */
 function findDyalogDir(): string | undefined {
-	// Check user-configured path first
 	const configured = vscode.workspace.getConfiguration('apl').get<string>('interpreter.path');
 	if (configured && fs.existsSync(configured)) {
 		return Path.dirname(configured);
 	}
-
-	if (!/^win/i.test(process.platform)) {
-		return undefined;
-	}
-
-	const programFiles = process.env['ProgramFiles'] || 'C:\\Program Files';
-	const dyalogBase = Path.join(programFiles, 'Dyalog');
-	if (!fs.existsSync(dyalogBase)) {
-		return undefined;
-	}
-
-	try {
-		const dirs = fs.readdirSync(dyalogBase)
-			.filter(d => /^Dyalog APL/i.test(d))
-			.sort()
-			.reverse();
-
-		for (const dir of dirs) {
-			const exePath = Path.join(dyalogBase, dir, 'dyalog.exe');
-			if (fs.existsSync(exePath)) {
-				return Path.join(dyalogBase, dir);
-			}
-		}
-	} catch { /* ignore */ }
-
-	return undefined;
+	return findDyalogDirBase();
 }
 
 /**

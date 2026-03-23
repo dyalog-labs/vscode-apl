@@ -4,42 +4,7 @@ import * as fs from 'fs';
 import * as Net from 'net';
 import * as Path from 'path';
 import * as vscode from 'vscode';
-
-/**
- * Find Dyalog APL installation on Windows
- */
-function findDyalogExe(): string | undefined {
-	if (!/^win/i.test(process.platform)) {
-		return undefined;
-	}
-
-	// Check common installation directories
-	const programFiles = process.env['ProgramFiles'] || 'C:\\Program Files';
-	const dyalogBase = Path.join(programFiles, 'Dyalog');
-
-	if (!fs.existsSync(dyalogBase)) {
-		return undefined;
-	}
-
-	try {
-		// List all Dyalog installations and find the latest version
-		const dirs = fs.readdirSync(dyalogBase)
-			.filter(d => /^Dyalog APL/i.test(d))
-			.sort()
-			.reverse(); // Latest version first
-
-		for (const dir of dirs) {
-			const exePath = Path.join(dyalogBase, dir, 'dyalog.exe');
-			if (fs.existsSync(exePath)) {
-				return exePath;
-			}
-		}
-	} catch {
-		// Ignore errors reading directory
-	}
-
-	return undefined;
-}
+import { findDyalogExe } from './findDyalog';
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'busy';
 

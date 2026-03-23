@@ -38,7 +38,7 @@
     "vscode:prepublish": "rimraf dist && npm run -S esbuild-base -- --minify",
     "test": "npm run compile && npx mocha --ui tdd --require out/tests/helpers/register-vscode-stub.js --timeout 10000 out/tests/unit/*.test.js out/tests/integration/*.test.js",
     "test:unit": "npm run compile && npx mocha --ui tdd --require out/tests/helpers/register-vscode-stub.js out/tests/unit/*.test.js",
-    "test:dyalog": "npm run compile && DYALOG_TESTS=1 npx mocha --ui tdd --require out/tests/helpers/register-vscode-stub.js --timeout 30000 out/tests/unit/*.test.js out/tests/integration/*.test.js",
+    "test:dyalog": "npm run compile && cross-env DYALOG_TESTS=1 npx mocha --ui tdd --require out/tests/helpers/register-vscode-stub.js --timeout 30000 out/tests/unit/*.test.js out/tests/integration/*.test.js",
     "test:e2e": "npm run build && npm run compile && vscode-test"
   },
   "devDependencies": {
@@ -54,6 +54,7 @@
     "@vscode/test-electron": "^2.5.2",
     "await-notify": "^1.0.1",
     "base64-js": "^1.5.1",
+    "cross-env": "^10.1.0",
     "esbuild": "^0.14.29",
     "eslint": "^8.12.0",
     "events": "^3.3.0",

@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { AplRuntime, FileAccessor } from '../../aplRuntime';
 import { AplSession } from '../../aplSession';
+import { findDyalogExe } from '../../findDyalog';
 import { MockRideServer } from './mockRideServer';
 
 /**
@@ -134,7 +135,10 @@ export class DyalogBackend implements TestBackend {
 		// Create .vscode dir for link.json (same as the extension expects)
 		fs.mkdirSync(path.join(tempDir, '.vscode'), { recursive: true });
 
-		const proc = cp.spawn('dyalog', ['+s', '-q'], {
+		const dyalogExe = findDyalogExe();
+		if (!dyalogExe) throw new Error('Dyalog executable not found');
+
+		const proc = cp.spawn(dyalogExe, ['+s', '-q'], {
 			env: {
 				...process.env,
 				RIDE_INIT: `SERVE:127.0.0.1:${port}`,
@@ -311,14 +315,9 @@ async function waitForPort(port: number, timeoutMs: number): Promise<void> {
 
 // ─── Backend factory ─────────────────────────────────────────────────
 
-/** Check whether `dyalog` is available on PATH. */
+/** Check whether dyalog is available. */
 export function isDyalogAvailable(): boolean {
-	try {
-		cp.execSync('which dyalog', { stdio: 'ignore' });
-		return true;
-	} catch {
-		return false;
-	}
+	return findDyalogExe() !== undefined;
 }
 
 /**
