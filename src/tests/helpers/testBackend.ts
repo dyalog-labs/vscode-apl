@@ -192,6 +192,7 @@ export class DyalogBackend implements TestBackend {
 	async execute(expression: string): Promise<string> {
 		return new Promise<string>((resolve) => {
 			let output = '';
+			let echoSeen = false;
 			const origHandler = (this.session as any)._debugHandler;
 			let resolved = false;
 			const done = () => {
@@ -203,10 +204,13 @@ export class DyalogBackend implements TestBackend {
 			};
 			const wrappedHandler = (command: string, args: any) => {
 				if (origHandler) origHandler(command, args);
+				if (command === 'EchoInput') {
+					echoSeen = true;
+				}
 				if (command === 'AppendSessionOutput') {
 					output += args.result;
 				}
-				if (command === 'SetPromptType' && args.type > 0) {
+				if (echoSeen && command === 'SetPromptType' && args.type > 0) {
 					done();
 				}
 			};
