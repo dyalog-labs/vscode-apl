@@ -1,7 +1,9 @@
 import assert = require('assert');
+import Path = require('path');
 import { AplRuntime, FileAccessor } from '../../aplRuntime';
 import { AplSession } from '../../aplSession';
 import { MockRideServer } from '../helpers/mockRideServer';
+import { normPath } from '../../utils';
 
 const mockFileAccessor: FileAccessor = {
 	isWindows: false,
@@ -667,8 +669,10 @@ suite('AplRuntime — breakpoint verification via OpenWindow', () => {
 
 	test('OpenWindow stop lines verify matching breakpoints', async () => {
 		// Pre-register a breakpoint with line matching a stop line
-		const path = '/abs/test.aplf';
-		(runtime as any)._breakPoints.set(path, [
+		// Use the resolved+normalized path that openWindow() will compute
+		const rawPath = '/abs/test.aplf';
+		const resolvedPath = normPath(Path.resolve(rawPath));
+		(runtime as any)._breakPoints.set(resolvedPath, [
 			{ id: 1, line: 3, verified: false },
 			{ id: 2, line: 7, verified: false },
 		]);
@@ -678,20 +682,21 @@ suite('AplRuntime — breakpoint verification via OpenWindow', () => {
 
 		// OpenWindow with stop=[3] should verify bp at line 3 but not line 7
 		server.send('OpenWindow', {
-			token: 1, name: 'Fn', filename: '/abs/test.aplf',
+			token: 1, name: 'Fn', filename: rawPath,
 			text: ['Fn', 'line1', 'line2', 'line3'], stop: [3], trace: [], monitor: [],
 		});
 		await new Promise(resolve => setTimeout(resolve, 50));
 
-		const bps = (runtime as any)._breakPoints.get(path);
+		const bps = (runtime as any)._breakPoints.get(resolvedPath);
 		assert.strictEqual(bps[0].verified, true, 'bp at line 3 should be verified');
 		assert.strictEqual(bps[1].verified, false, 'bp at line 7 should remain unverified');
 		assert.deepStrictEqual(verified, [1]);
 	});
 
 	test('already-verified breakpoints are not re-emitted', async () => {
-		const path = '/abs/test.aplf';
-		(runtime as any)._breakPoints.set(path, [
+		const rawPath = '/abs/test.aplf';
+		const resolvedPath = normPath(Path.resolve(rawPath));
+		(runtime as any)._breakPoints.set(resolvedPath, [
 			{ id: 1, line: 3, verified: true }, // already verified
 		]);
 
@@ -699,7 +704,7 @@ suite('AplRuntime — breakpoint verification via OpenWindow', () => {
 		runtime.on('breakpointValidated', (bp: any) => events.push(bp));
 
 		server.send('OpenWindow', {
-			token: 1, name: 'Fn', filename: '/abs/test.aplf',
+			token: 1, name: 'Fn', filename: rawPath,
 			text: ['Fn', 'line1', 'line2', 'line3'], stop: [3], trace: [], monitor: [],
 		});
 		await new Promise(resolve => setTimeout(resolve, 50));
