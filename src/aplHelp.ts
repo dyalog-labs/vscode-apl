@@ -4,102 +4,102 @@ import * as Path from 'path';
 import * as cp from 'child_process';
 
 /**
- * Mapping from APL glyphs to their documentation page paths
+ * Mapping from APL glyphs to their symbol overview page
  * (relative to language-reference-guide/).
  *
- * A string value means a single page; an array means multiple pages
- * (monadic + dyadic) that will be combined into one view.
+ * Each glyph maps to its symbols/<name>.htm overview page, which
+ * matches the behaviour of the original Dyalog help viewer.
  */
-const GLYPH_DOC_MAP: Record<string, string | string[]> = {
+const GLYPH_DOC_MAP: Record<string, string> = {
 	// Arithmetic
-	'+': ['primitive-functions/conjugate.htm', 'primitive-functions/plus.htm'],
-	'-': ['primitive-functions/negate.htm', 'primitive-functions/minus.htm'],
-	'×': ['primitive-functions/direction.htm', 'primitive-functions/times.htm'],
-	'÷': ['primitive-functions/reciprocal.htm', 'primitive-functions/divide.htm'],
-	'|': ['primitive-functions/magnitude.htm', 'primitive-functions/residue.htm'],
-	'*': ['primitive-functions/exponential.htm', 'primitive-functions/power.htm'],
-	'⍟': ['primitive-functions/natural-logarithm.htm', 'primitive-functions/logarithm.htm'],
-	'○': ['primitive-functions/pi-times.htm', 'primitive-functions/circular-functions.htm'],
-	'⌈': ['primitive-functions/ceiling.htm', 'primitive-functions/maximum.htm'],
-	'⌊': ['primitive-functions/floor.htm', 'primitive-functions/minimum.htm'],
-	'!': ['primitive-functions/factorial.htm', 'primitive-functions/binomial.htm'],
-	'?': ['primitive-functions/roll.htm', 'primitive-functions/deal.htm'],
-	'⌹': ['primitive-functions/matrix-inverse.htm', 'primitive-functions/matrix-divide.htm'],
+	'+': 'symbols/plus.htm',
+	'-': 'symbols/minus.htm',
+	'×': 'symbols/times.htm',
+	'÷': 'symbols/divide.htm',
+	'|': 'symbols/stile.htm',
+	'*': 'symbols/star.htm',
+	'⍟': 'symbols/log.htm',
+	'○': 'symbols/circle.htm',
+	'⌈': 'symbols/upstile.htm',
+	'⌊': 'symbols/downstile.htm',
+	'!': 'symbols/exclamation-mark.htm',
+	'?': 'symbols/question-mark.htm',
+	'⌹': 'symbols/domino.htm',
 
 	// Comparison
-	'<': 'primitive-functions/less-than.htm',
-	'≤': 'primitive-functions/less-than-or-equal-to.htm',
-	'=': 'primitive-functions/equal-to.htm',
-	'≥': 'primitive-functions/greater-than-or-equal-to.htm',
-	'>': 'primitive-functions/greater-than.htm',
-	'≠': ['primitive-functions/unique-mask.htm', 'primitive-functions/not-equal-to.htm'],
-	'≡': ['primitive-functions/depth.htm', 'primitive-functions/match.htm'],
-	'≢': ['primitive-functions/tally.htm', 'primitive-functions/not-match.htm'],
+	'<': 'symbols/less-than.htm',
+	'≤': 'symbols/less-than-or-equal-to.htm',
+	'=': 'symbols/equal.htm',
+	'≥': 'symbols/greater-than-or-equal-to.htm',
+	'>': 'symbols/greater-than.htm',
+	'≠': 'symbols/not-equal.htm',
+	'≡': 'symbols/equal-underbar.htm',
+	'≢': 'symbols/equal-underbar-slash.htm',
 
 	// Logical
-	'∧': 'primitive-functions/lowest-common-multiple-and.htm',
-	'∨': 'primitive-functions/greatest-common-divisor-or.htm',
-	'⍲': 'primitive-functions/nand.htm',
-	'⍱': 'primitive-functions/nor.htm',
-	'~': ['primitive-functions/not.htm', 'primitive-functions/without.htm'],
+	'∧': 'symbols/logical-and.htm',
+	'∨': 'symbols/logical-or.htm',
+	'⍲': 'symbols/logical-nand.htm',
+	'⍱': 'symbols/logical-nor.htm',
+	'~': 'symbols/tilde.htm',
 
 	// Structural
-	'⍴': ['primitive-functions/shape.htm', 'primitive-functions/reshape.htm'],
-	',': ['primitive-functions/ravel/index.htm', 'primitive-functions/catenate-laminate.htm'],
-	'⍪': ['primitive-functions/table.htm', 'primitive-functions/catenate-first.htm'],
-	'⌽': ['primitive-functions/reverse.htm', 'primitive-functions/rotate.htm'],
-	'⊖': ['primitive-functions/reverse-first.htm', 'primitive-functions/rotate-first.htm'],
-	'⍉': ['primitive-functions/transpose.htm', 'primitive-functions/dyadic-transpose.htm'],
+	'⍴': 'symbols/rho.htm',
+	',': 'symbols/comma.htm',
+	'⍪': 'symbols/comma-bar.htm',
+	'⌽': 'symbols/circle-stile.htm',
+	'⊖': 'symbols/circle-bar.htm',
+	'⍉': 'symbols/circle-backslash.htm',
 
 	// Selection
-	'↑': ['primitive-functions/mix.htm', 'primitive-functions/take/index.htm'],
-	'↓': ['primitive-functions/split.htm', 'primitive-functions/drop/index.htm'],
-	'⊂': ['primitive-functions/enclose/index.htm', 'primitive-functions/partitioned-enclose.htm'],
-	'⊆': ['primitive-functions/nest.htm', 'primitive-functions/partition.htm'],
-	'⊃': ['primitive-functions/first.htm', 'primitive-functions/pick.htm'],
-	'⍳': ['primitive-functions/index-generator.htm', 'primitive-functions/index-of.htm'],
-	'⍸': ['primitive-functions/where.htm', 'primitive-functions/interval-index.htm'],
-	'∊': ['primitive-functions/enlist.htm', 'primitive-functions/membership.htm'],
-	'⍷': 'primitive-functions/find.htm',
-	'⍋': ['primitive-functions/grade-up.htm', 'primitive-functions/dyadic-grade-up.htm'],
-	'⍒': ['primitive-functions/grade-down.htm', 'primitive-functions/dyadic-grade-down.htm'],
-	'⌷': ['primitive-functions/materialise.htm', 'primitive-functions/index-function/index.htm'],
-	'∩': 'primitive-functions/intersection.htm',
-	'∪': ['primitive-functions/unique.htm', 'primitive-functions/union.htm'],
+	'↑': 'symbols/up-arrow.htm',
+	'↓': 'symbols/down-arrow.htm',
+	'⊂': 'symbols/left-shoe.htm',
+	'⊆': 'symbols/left-shoe-underbar.htm',
+	'⊃': 'symbols/right-shoe.htm',
+	'⍳': 'symbols/iota.htm',
+	'⍸': 'symbols/iota-underbar.htm',
+	'∊': 'symbols/epsilon.htm',
+	'⍷': 'symbols/epsilon-underbar.htm',
+	'⍋': 'symbols/grade-up.htm',
+	'⍒': 'symbols/grade-down.htm',
+	'⌷': 'symbols/squad.htm',
+	'∩': 'symbols/up-shoe.htm',
+	'∪': 'symbols/down-shoe.htm',
 
 	// Miscellaneous functions
-	'⊤': 'primitive-functions/encode.htm',
-	'⊥': 'primitive-functions/decode.htm',
-	'⊢': 'primitive-functions/right.htm',
-	'⊣': 'primitive-functions/left.htm',
-	'⍎': ['primitive-functions/execute.htm', 'primitive-functions/dyadic-execute.htm'],
-	'⍕': ['primitive-functions/format.htm', 'primitive-functions/format-by-specification.htm'],
+	'⊤': 'symbols/down-tack.htm',
+	'⊥': 'symbols/up-tack.htm',
+	'⊢': 'symbols/right-tack.htm',
+	'⊣': 'symbols/left-tack.htm',
+	'⍎': 'symbols/hydrant.htm',
+	'⍕': 'symbols/thorn.htm',
 
 	// Operators
-	'/': ['primitive-functions/replicate.htm', 'primitive-operators/reduce/index.htm'],
-	'\\': ['primitive-functions/expand.htm', 'primitive-operators/scan.htm'],
-	'⌿': ['primitive-functions/replicate-first.htm', 'primitive-operators/reduce-first/index.htm'],
-	'⍀': ['primitive-functions/expand-first.htm', 'primitive-operators/scan-first.htm'],
-	'¨': 'primitive-operators/each/each-with-monadic-operand.htm',
-	'⍨': 'primitive-operators/commute.htm',
-	'⍤': 'primitive-operators/rank.htm',
-	'⍣': 'primitive-operators/power.htm',
-	'⍥': 'primitive-operators/over.htm',
-	'∘': 'primitive-operators/beside.htm',
-	'⍛': 'primitive-operators/behind.htm',
-	'⌸': 'primitive-operators/key.htm',
-	'⌺': 'primitive-operators/stencil.htm',
-	'⍠': 'primitive-operators/variant.htm',
-	'⌶': 'primitive-operators/i-beam/index.htm',
-	'@': 'primitive-operators/at.htm',
-	'&': 'primitive-operators/spawn.htm',
+	'/': 'symbols/slash.htm',
+	'\\': 'symbols/backslash.htm',
+	'⌿': 'symbols/slash-bar.htm',
+	'⍀': 'symbols/backslash-bar.htm',
+	'¨': 'symbols/diaeresis.htm',
+	'⍨': 'symbols/tilde-diaeresis.htm',
+	'⍤': 'symbols/jot-diaeresis.htm',
+	'⍣': 'symbols/star-diaeresis.htm',
+	'⍥': 'symbols/circle-diaeresis.htm',
+	'∘': 'symbols/jot.htm',
+	'⍛': 'symbols/jot-underbar.htm',
+	'⌸': 'symbols/quad-equal.htm',
+	'⌺': 'symbols/quad-diamond.htm',
+	'⍠': 'symbols/quad-colon.htm',
+	'⌶': 'symbols/ibeam.htm',
+	'@': 'symbols/at.htm',
+	'&': 'symbols/ampersand.htm',
 
 	// Other syntax
-	'←': 'other-syntax/assignment/index.htm',
-	'→': 'other-syntax/branch.htm',
+	'←': 'symbols/left-arrow.htm',
+	'→': 'symbols/right-arrow.htm',
 	'⋄': 'glyphs.htm',
 	'⍝': 'glyphs.htm',
-	'⍬': 'other-syntax/zilde.htm',
+	'⍬': 'symbols/zilde.htm',
 	'⍞': 'system-functions/character-input-output.htm',
 
 	// I/O
@@ -173,8 +173,104 @@ const SYSTEM_FN_DOC_MAP: Record<string, string> = {
 	'talloc': 'talloc.htm', 'vget': 'vget.htm', 'vset': 'vset.htm',
 };
 
+/**
+ * System command name (lowercase, without ) prefix) → doc page path
+ * (relative to language-reference-guide/system-commands/).
+ */
+const SYSTEM_CMD_DOC_MAP: Record<string, string> = {
+	'classes': 'classes.htm', 'clear': 'clear.htm', 'cmd': 'cmd.htm',
+	'continue': 'continue.htm', 'copy': 'copy.htm', 'cs': 'cs.htm',
+	'drop': 'drop.htm', 'ed': 'ed.htm', 'erase': 'erase.htm',
+	'events': 'events.htm', 'fns': 'fns.htm', 'holds': 'holds.htm',
+	'lib': 'lib.htm', 'load': 'load.htm', 'methods': 'methods.htm',
+	'ns': 'ns.htm', 'objects': 'objects.htm', 'obs': 'obs.htm',
+	'off': 'off.htm', 'ops': 'ops.htm', 'pcopy': 'pcopy.htm',
+	'props': 'props.htm', 'reset': 'reset.htm', 'save': 'save.htm',
+	'sh': 'sh.htm', 'si': 'si.htm', 'sic': 'sic.htm', 'sinl': 'sinl.htm',
+	'tid': 'tid.htm', 'vars': 'vars.htm', 'wsid': 'wsid.htm',
+	'xload': 'xload.htm',
+};
+
+/**
+ * Control structure keyword (lowercase, without : prefix) → doc page path
+ * (relative to programming-reference-guide/defined-functions-and-operators/
+ * traditional-functions-and-operators/control-structures/).
+ *
+ * Sub-keywords (e.g. :AndIf, :ElseIf) map to their parent structure page.
+ */
+const CS = 'programming-reference-guide/defined-functions-and-operators/traditional-functions-and-operators/control-structures/';
+const CONTROL_STRUCTURE_DOC_MAP: Record<string, string> = {
+	// Flow control
+	'if': CS + 'if.htm',
+	'andif': CS + 'if.htm',
+	'orif': CS + 'if.htm',
+	'else': CS + 'if.htm',
+	'elseif': CS + 'if.htm',
+	'endif': CS + 'if.htm',
+
+	'select': CS + 'select.htm',
+	'case': CS + 'select.htm',
+	'caselist': CS + 'select.htm',
+	'endselect': CS + 'select.htm',
+
+	// Loops
+	'for': CS + 'for.htm',
+	'forin': CS + 'for.htm',
+	'in': CS + 'for.htm',
+	'ineach': CS + 'for.htm',
+	'endfor': CS + 'for.htm',
+
+	'while': CS + 'while.htm',
+	'endwhile': CS + 'while.htm',
+
+	'repeat': CS + 'repeat.htm',
+	'until': CS + 'repeat.htm',
+	'endrepeat': CS + 'repeat.htm',
+
+	'leave': CS + 'leave.htm',
+	'continue': CS + 'continue.htm',
+	'return': CS + 'return.htm',
+	'goto': CS + 'goto.htm',
+
+	// Error handling
+	'trap': CS + 'trap.htm',
+	'endtrap': CS + 'trap.htm',
+
+	'hold': CS + 'hold.htm',
+	'endhold': CS + 'hold.htm',
+
+	'disposable': CS + 'disposable.htm',
+	'enddisposable': CS + 'disposable.htm',
+
+	'with': CS + 'with.htm',
+	'endwith': CS + 'with.htm',
+
+	// OOP
+	'class': CS + 'class.htm',
+	'endclass': CS + 'class.htm',
+
+	'namespace': CS + 'namespace.htm',
+	'endnamespace': CS + 'namespace.htm',
+
+	'interface': CS + 'interface.htm',
+	'endinterface': CS + 'interface.htm',
+
+	'section': CS + 'section.htm',
+	'endsection': CS + 'section.htm',
+
+	'using': CS + 'using.htm',
+	'endusing': CS + 'using.htm',
+
+	'implements': CS + 'implements.htm',
+	'access': CS + 'access.htm',
+	'attribute': CS + 'attribute.htm',
+	'signature': CS + 'signature.htm',
+};
+
 let helpPanel: vscode.WebviewPanel | undefined;
 let extractedPath: string | undefined;
+let helpHistory: string[][] = [];
+let helpCurrentPages: string[] | undefined;
 
 /**
  * Find the Dyalog installation directory (containing dyalog.exe).
@@ -284,22 +380,78 @@ function getDocPages(document: vscode.TextDocument, position: vscode.Position): 
 	// Try the character before the cursor first (left wins), then at cursor
 	const charsToTry = col > 0 ? [col - 1, col] : [col];
 
+	const LRG = 'language-reference-guide/';
 	for (const c of charsToTry) {
 		if (c < 0 || c >= line.length) { continue; }
 		const ch = line[c];
 
+		// Control structure: :Keyword
+		if (ch === ':' || /[a-zA-Z]/.test(ch)) {
+			const csPage = tryControlStructure(line, c);
+			if (csPage) { return [csPage]; }
+		}
+
+		// System command: )Name
+		if (ch === ')' || /[a-zA-Z]/.test(ch)) {
+			const cmdPage = trySystemCommand(line, c);
+			if (cmdPage) { return [LRG + cmdPage]; }
+		}
+
 		// System function: ⎕Name — scan to find full ⎕Name around position
 		if (ch === '⎕' || /[a-zA-Z]/.test(ch)) {
 			const sysFn = trySystemFunction(line, c);
-			if (sysFn) { return [sysFn]; }
+			if (sysFn) { return [LRG + sysFn]; }
 		}
 
 		// Glyph lookup
 		const page = GLYPH_DOC_MAP[ch];
-		if (page) { return Array.isArray(page) ? page : [page]; }
+		if (page) {
+			return [LRG + page];
+		}
 	}
 
 	return undefined;
+}
+
+/**
+ * Try to resolve a system command ()Name) around the given column.
+ * Returns path relative to language-reference-guide/, or undefined.
+ */
+function trySystemCommand(line: string, col: number): string | undefined {
+	// Scan backward to find the )
+	let start = col;
+	while (start > 0 && /[a-zA-Z]/.test(line[start])) { start--; }
+	if (line[start] !== ')') { return undefined; }
+
+	// Scan forward to find the end of the command name
+	let end = start + 1;
+	while (end < line.length && /[a-zA-Z]/.test(line[end])) { end++; }
+
+	const name = line.substring(start + 1, end).toLowerCase();
+	if (name.length === 0) { return undefined; }
+
+	const page = SYSTEM_CMD_DOC_MAP[name];
+	return page ? `system-commands/${page}` : undefined;
+}
+
+/**
+ * Try to resolve a control structure (:Keyword) around the given column.
+ * Returns full path relative to docBasePath, or undefined.
+ */
+function tryControlStructure(line: string, col: number): string | undefined {
+	// Scan backward to find the :
+	let start = col;
+	while (start > 0 && /[a-zA-Z]/.test(line[start])) { start--; }
+	if (line[start] !== ':') { return undefined; }
+
+	// Scan forward to find the end of the keyword
+	let end = start + 1;
+	while (end < line.length && /[a-zA-Z]/.test(line[end])) { end++; }
+
+	const name = line.substring(start + 1, end).toLowerCase();
+	if (name.length === 0) { return undefined; }
+
+	return CONTROL_STRUCTURE_DOC_MAP[name];
 }
 
 /**
@@ -328,14 +480,17 @@ function trySystemFunction(line: string, col: number): string | undefined {
  * Show one or more documentation pages in a VS Code webview panel.
  * When multiple paths are given (monadic + dyadic), their bodies are combined.
  */
-async function showDocPage(docBasePath: string, relativePaths: string[]): Promise<void> {
+async function showDocPage(docBasePath: string, relativePaths: string[], isBack = false): Promise<void> {
 	const lrgDir = Path.join(docBasePath, 'language-reference-guide');
 	const imgBaseDir = Path.join(lrgDir, 'img');
 
-	// Read all pages, skip missing ones
+	// Read all pages, skip missing ones.
+	// Paths may reference other top-level sections (e.g. programming-reference-guide),
+	// so resolve relative to docBasePath and guard against traversal beyond it.
 	const pages: { html: string; dir: string; title: string }[] = [];
 	for (const rel of relativePaths) {
-		const fullPath = Path.join(lrgDir, rel);
+		const fullPath = Path.resolve(docBasePath, rel);
+		if (!fullPath.startsWith(docBasePath + Path.sep) && fullPath !== docBasePath) { continue; }
 		if (!fs.existsSync(fullPath)) { continue; }
 		const raw = fs.readFileSync(fullPath, 'utf-8');
 		const titleMatch = raw.match(/<title>(.*?)<\/title>/i);
@@ -345,6 +500,12 @@ async function showDocPage(docBasePath: string, relativePaths: string[]): Promis
 		vscode.window.showWarningMessage(`Documentation page not found: ${relativePaths[0]}`);
 		return;
 	}
+
+	// Track navigation history
+	if (!isBack && helpCurrentPages) {
+		helpHistory.push(helpCurrentPages);
+	}
+	helpCurrentPages = relativePaths;
 
 	const title = `APL: ${pages.map(p => p.title).join(' / ')}`;
 
@@ -358,11 +519,19 @@ async function showDocPage(docBasePath: string, relativePaths: string[]): Promis
 			title,
 			{ viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
 			{
-				enableScripts: false,
+				enableScripts: true,
 				localResourceRoots: [vscode.Uri.file(docBasePath)],
 			}
 		);
-		helpPanel.onDidDispose(() => { helpPanel = undefined; });
+		helpPanel.onDidDispose(() => { helpPanel = undefined; helpHistory = []; helpCurrentPages = undefined; });
+		helpPanel.webview.onDidReceiveMessage(async (msg) => {
+			if (msg.type === 'navigate' && msg.path) {
+				await showDocPage(docBasePath, [msg.path]);
+			} else if (msg.type === 'back' && helpHistory.length > 0) {
+				const prev = helpHistory.pop()!;
+				await showDocPage(docBasePath, prev, true);
+			}
+		});
 	}
 
 	let html: string;
@@ -394,8 +563,18 @@ async function showDocPage(docBasePath: string, relativePaths: string[]): Promis
 		return `src="${webviewUri}"`;
 	});
 
-	// Remove links that point to other doc pages to avoid broken navigation
-	html = html.replace(/<a\s+href="([^"]*\.htm[^"]*)"/gi, '<a href="#"');
+	// Rewrite relative .htm links so clicking them navigates within the webview.
+	// CHM-extracted HTML may use unquoted href values (e.g. <a href=foo.htm>),
+	// so we match both quoted and unquoted forms.
+	html = html.replace(/<a\s+href=(?:"([^"]*\.htm[^"]*)"|([^\s>"]*\.htm[^\s>]*))/gi, (_m, quoted: string, unquoted: string) => {
+		const href = quoted || unquoted;
+		// Resolve the href relative to the page's directory to get a
+		// path relative to docBasePath (the extracted help root)
+		const abs = Path.resolve(primaryDir, href);
+		if (!abs.startsWith(docBasePath + Path.sep)) { return _m; }
+		const resolved = Path.relative(docBasePath, abs).replace(/\\/g, '/');
+		return `<a href="#" data-doc-path="${resolved}"`;
+	});
 
 	// Remove syntax highlighting from code blocks (keep gray block background)
 	html = html.replace(/\.highlight\s+\.\w+\{[^}]*\}/g, '');
@@ -404,6 +583,32 @@ async function showDocPage(docBasePath: string, relativePaths: string[]): Promis
 .highlight{background:#f8f8f8 !important}
 code{background:transparent !important;background-color:transparent !important}
 </style></head>`);
+
+	// Inject back button and script to handle doc link navigation
+	const hasHistory = helpHistory.length > 0;
+	const backButton = hasHistory
+		? `<div style="position:sticky;top:0;z-index:999;padding:4px 8px;background:var(--vscode-editor-background,#fff);border-bottom:1px solid #d9d9d9"><button id="apl-back-btn" style="cursor:pointer;padding:2px 8px;font-size:13px" title="Go back">Back</button></div>`
+		: '';
+	const navScript = `<script>
+(function(){
+	const vscode = acquireVsCodeApi();
+	document.addEventListener('click', function(e) {
+		const a = e.target.closest('a[data-doc-path]');
+		if (a) {
+			e.preventDefault();
+			vscode.postMessage({ type: 'navigate', path: a.getAttribute('data-doc-path') });
+		}
+	});
+	const backBtn = document.getElementById('apl-back-btn');
+	if (backBtn) {
+		backBtn.addEventListener('click', function() {
+			vscode.postMessage({ type: 'back' });
+		});
+	}
+})();
+</script>`;
+	html = html.replace(/<body>/i, '<body>' + backButton);
+	html = html.replace(/<\/body>/i, navScript + '</body>');
 
 	helpPanel.webview.html = html;
 }
@@ -481,18 +686,31 @@ export async function handleHelpForLine(
 function getDocPagesFromLine(line: string, col: number): string[] | undefined {
 	// Try the character before the cursor first (left wins), then at cursor
 	const charsToTry = col > 0 ? [col - 1, col] : [col];
+	const LRG = 'language-reference-guide/';
 
 	for (const c of charsToTry) {
 		if (c < 0 || c >= line.length) { continue; }
 		const ch = line[c];
 
+		if (ch === ':' || /[a-zA-Z]/.test(ch)) {
+			const csPage = tryControlStructure(line, c);
+			if (csPage) { return [csPage]; }
+		}
+
+		if (ch === ')' || /[a-zA-Z]/.test(ch)) {
+			const cmdPage = trySystemCommand(line, c);
+			if (cmdPage) { return [LRG + cmdPage]; }
+		}
+
 		if (ch === '⎕' || /[a-zA-Z]/.test(ch)) {
 			const sysFn = trySystemFunction(line, c);
-			if (sysFn) { return [sysFn]; }
+			if (sysFn) { return [LRG + sysFn]; }
 		}
 
 		const page = GLYPH_DOC_MAP[ch];
-		if (page) { return Array.isArray(page) ? page : [page]; }
+		if (page) {
+			return [LRG + page];
+		}
 	}
 
 	return undefined;
