@@ -5,12 +5,11 @@
 'use strict';
 
 import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
 import * as vscode from 'vscode';
 import { WorkspaceFolder, DebugConfiguration, ProviderResult, CancellationToken } from 'vscode';
 import { AplDebugSession } from './aplDebug';
 import { FileAccessor } from './aplRuntime';
+import { DyalogConnection, findConnectionsFile } from './findDyalog';
 import { ReplManager } from './replManager';
 import { ReplViewProvider } from './replPanel';
 import { AplBacktickHandler } from './aplBacktick';
@@ -21,69 +20,6 @@ let aplStatusBarItem: vscode.StatusBarItem;
 
 export function updateStatusBar(text: string): void {
 	aplStatusBarItem.text = text;
-}
-
-const MAX_DYALOG_VERSION = 20;
-
-interface DyalogConnection {
-	name?: string;
-	type?: string;
-	subtype?: string;
-	exe?: string;
-	port?: string;
-	host?: string;
-	args?: string;
-	preset?: boolean;
-}
-
-/**
- * Return the platform-specific directory where Dyalog/RIDE store per-version config.
- * macOS:  ~/Library/Application Support/
- * Linux:  ~/.config/
- * Windows: %APPDATA%
- */
-function getAppDataDir(): string | undefined {
-	if (process.platform === 'darwin') {
-		return path.join(os.homedir(), 'Library', 'Application Support');
-	} else if (process.platform === 'win32') {
-		return process.env['APPDATA'];
-	} else {
-		return path.join(os.homedir(), '.config');
-	}
-}
-
-/**
- * Find the connections.json from the latest installed Dyalog version
- * (capped at MAX_DYALOG_VERSION). Scans Dyalog-{version} directories.
- */
-function findConnectionsFile(): string | undefined {
-	const appData = getAppDataDir();
-	if (!appData || !fs.existsSync(appData)) {
-		return undefined;
-	}
-
-	try {
-		const entries = fs.readdirSync(appData);
-		let bestVersion = 0;
-		let bestPath: string | undefined;
-
-		for (const entry of entries) {
-			const match = entry.match(/^Dyalog-(\d+(?:\.\d+)?)$/);
-			if (!match) { continue; }
-			const version = parseFloat(match[1]);
-			if (version > MAX_DYALOG_VERSION) { continue; }
-			if (version <= bestVersion) { continue; }
-
-			const connFile = path.join(appData, entry, 'connections.json');
-			if (fs.existsSync(connFile)) {
-				bestVersion = version;
-				bestPath = connFile;
-			}
-		}
-		return bestPath;
-	} catch {
-		return undefined;
-	}
 }
 
 /**
@@ -109,7 +45,8 @@ function getDyalogDebugConfigs(): DebugConfiguration[] {
 					request: 'launch',
 					name: conn.name.trim(),
 					exe: conn.exe,
-					program: '${file}',
+					cwd: '${workspaceFolder}',
+					stopOnEntry: true,
 				});
 			} else if (conn.port) {
 				configs.push({
@@ -118,7 +55,8 @@ function getDyalogDebugConfigs(): DebugConfiguration[] {
 					name: conn.name.trim(),
 					host: conn.host || '127.0.0.1',
 					port: parseInt(conn.port, 10),
-					program: '${file}',
+					cwd: '${workspaceFolder}',
+					stopOnEntry: true,
 				});
 			}
 		}
@@ -377,7 +315,7 @@ export function activateAplDebug(context: vscode.ExtensionContext) {
 					name: "APL Launch",
 					request: "launch",
 					type: "apl",
-					program: "${file}"
+					cwd: "${workspaceFolder}"
 				}
 			];
 		}
@@ -441,70 +379,32 @@ class AplConfigurationProvider implements vscode.DebugConfigurationProvider {
 
 		// if launch.json is missing or empty
 		if (!config.type && !config.request && !config.name) {
+			config.type = 'apl';
+			config.name = 'Launch';
+			config.request = 'launch';
+			config.cwd = folder?.uri.fsPath;
+			config.stopOnEntry = true;
+		}
+
+		// Set program from active editor if available
+		if (!config.program) {
 			const editor = vscode.window.activeTextEditor;
 			if (editor && editor.document.languageId === 'apl') {
-				config.type = 'apl';
-				config.name = 'Launch';
-				config.request = 'launch';
-				config.program = '${file}';
-				config.cwd = folder?.uri.fsPath;
-				config.stopOnEntry = true;
+				config.program = editor.document.uri.fsPath;
 			}
 		}
 
-		// Ensure a connected REPL session exists
+		// Attach to the focused session
 		const manager = ReplManager.getInstance();
 		config.internalConsoleOptions = 'neverOpen';
 
 		if (!config.replId) {
-			// Standalone launch — always create a fresh REPL tab
-			const replId = manager.createTab();
-			const tab = manager.getTab(replId)!;
-			vscode.commands.executeCommand('aplRepl.focus');
-			try {
-				// Use exe/host/port from config if provided, otherwise fall back to handleConnect()
-				if (config.port) {
-					await tab.session.connect(config.host || '127.0.0.1', config.port);
-				} else if (config.exe) {
-					await tab.session.spawn(config.exe);
-				} else {
-					await tab.handleConnect();
-				}
-				// Wait for the interpreter to be fully ready (SetPromptType)
-				if (!tab.session.isConnected || tab.session.state !== 'connected') {
-					await new Promise<void>((resolve, reject) => {
-						const timeout = setTimeout(() => reject(new Error('timeout')), 10000);
-						tab.session.once('ready', () => { clearTimeout(timeout); resolve(); });
-					});
-				}
-			} catch {
-				vscode.window.showErrorMessage("Failed to start APL interpreter.");
+			const activeTab = manager.activeTab;
+			if (!activeTab || !activeTab.session.isConnected) {
+				vscode.window.showInformationMessage("Please connect to a Dyalog interpreter first.");
 				return undefined;
 			}
-			config.replId = replId;
-
-			// Auto-link workspace folder in the fresh session
-			const linkFolder = folder?.uri.fsPath || config.cwd;
-			if (linkFolder) {
-				const folderPath = linkFolder.replace(/\\/g, '/');
-				// Must await: getLinkInfo() in launchRequest needs Link to be done
-				await this._execAndWait(tab, `)clear`);
-				await this._execAndWait(tab, `⎕SE.Link.Create '#' '${folderPath}'`);
-			}
-		}
-
-		// Set cwd from workspace folder if not provided
-		if (!config.cwd) {
-			if (folder) {
-				config.cwd = folder.uri.fsPath;
-			} else if (config.program) {
-				// Try to find workspace folder containing the program
-				const programUri = vscode.Uri.file(config.program);
-				const wsFolder = vscode.workspace.getWorkspaceFolder(programUri);
-				if (wsFolder) {
-					config.cwd = wsFolder.uri.fsPath;
-				}
-			}
+			config.replId = manager.activeReplId;
 		}
 
 		// Update session name to show the REPL number in the debug toolbar
@@ -513,38 +413,15 @@ class AplConfigurationProvider implements vscode.DebugConfigurationProvider {
 			config.name = tab.label;
 		}
 
-		if (!config.program && !config.cwd) {
-			vscode.window.showInformationMessage("Cannot find a program to debug");
+		if (!config.program) {
+			vscode.window.showInformationMessage("Please open an APL file to debug.");
 			return undefined;
 		}
 
 		return config;
 	}
 
-	/** Execute APL and wait for the echo before continuing. */
-	private _execAndWait(tab: import('./replTab').ReplTab, expression: string): Promise<void> {
-		return new Promise<void>(resolve => {
-			const session = tab.session;
-			if (!session.isConnected) { resolve(); return; }
 
-			const text = expression.endsWith('\n') ? expression : `${expression}\n`;
-			const handler = (input: string) => {
-				if (input === text) {
-					session.removeListener('echo', handler);
-					clearTimeout(timer);
-					resolve();
-				}
-			};
-			session.on('echo', handler);
-
-			const timer = setTimeout(() => {
-				session.removeListener('echo', handler);
-				resolve();
-			}, 10000);
-
-			session.execute(expression);
-		});
-	}
 }
 
 export const workspaceFileAccessor: FileAccessor = {
