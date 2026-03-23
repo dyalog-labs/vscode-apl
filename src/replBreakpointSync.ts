@@ -211,9 +211,13 @@ export class ReplBreakpointSync implements vscode.Disposable {
 		const fnbp: Record<string, number[]> = {};
 		for (const bp of vscBps) {
 			const line = bp.location.range.start.line; // 0-based
-			const row = this._linkInfo.find(
-				r => normPath(r.filePath) === normalizedPath && r.startLine < line
-			);
+			// Find the closest preceding function (largest startLine <= line)
+			let row: LinkInfoRow | undefined;
+			for (const r of this._linkInfo) {
+				if (normPath(r.filePath) === normalizedPath && r.startLine <= line) {
+					if (!row || r.startLine > row.startLine) { row = r; }
+				}
+			}
 			if (row) {
 				const lines = fnbp[row.aplName] || [];
 				lines.push(line - row.startLine);

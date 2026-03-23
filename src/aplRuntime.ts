@@ -5,7 +5,6 @@
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as Path from 'path';
-import { Subject } from 'await-notify';
 import { AplSession } from './aplSession';
 import { normPath, PendingRequest, PendingRequests } from './utils';
 import type {
@@ -21,6 +20,18 @@ import type {
 	TaskDialogMessage, UnknownCommandMessage, UpdateDisplayNameMessage, ValueTipMessage,
 	WindowTypeChangedMessage,
 } from './rideMessages';
+
+/**
+ * Parse a stack frame description in `name[line]` format.
+ * Returns the function name and line offset within the function.
+ */
+export function parseStackDescription(description: string): { name: string; lineOffset: number } {
+	const m = /(.*)\[(\d+)\]/.exec(description);
+	if (!m) {
+		return { name: description || '', lineOffset: 0 };
+	}
+	return { name: m[1], lineOffset: +m[2] };
+}
 
 export interface FileAccessor {
 	isWindows: boolean;
@@ -81,8 +92,8 @@ export class AplRuntime extends EventEmitter {
 		startLine: number;
 	}[] = [];
 
-	// maps from sourceFile to APL name
-	private _linkMap = {};
+	// maps APL name → file path and file path → APL name
+	private _linkMap: Record<string, string> = {};
 
 	// since we want to send breakpoint events, we will assign an id to every event
 	// so that the frontend can match events with breakpoints.
@@ -103,7 +114,8 @@ export class AplRuntime extends EventEmitter {
 	public get currentWindow(): OpenWindowMessage | undefined { return this._windows[this._winId]; }
 
 	private _executeText = '';
-	private _echoReceived = new Subject();
+	private _echoReceived = new PendingRequest<void>();
+	private _execTimeoutMs = 10000;
 	private _windows: OpenWindowMessage[] = [];
 
 
@@ -212,7 +224,7 @@ export class AplRuntime extends EventEmitter {
 		.then(() => this._fileAccessor.readFile(this._link))
 		.then((data) => {
 			const json = new TextDecoder().decode(data);
-			const map = {};
+			const map: Record<string, string> = {};
 			this._linkInfo = JSON.parse(json).map((row: string[]) => {
 				const aplName = row[0][0] === '#' ? row[0] : `${row[1]}.${row[0]}`;
 				const filePath = Path.resolve(row[3]);
@@ -305,9 +317,10 @@ export class AplRuntime extends EventEmitter {
 	private async exec(trace: number, expression: string, awaitEcho?: number) {
 		const text = `${expression}\n`;
 		this._executeText = text;
+		const echoPromise = awaitEcho ? this._echoReceived.create(this._execTimeoutMs) : undefined;
 		this.send('Execute', { trace, text });
-		if (awaitEcho) {
-			await this._echoReceived.wait();
+		if (echoPromise) {
+			await echoPromise;
 		}
 	}
 
@@ -348,7 +361,7 @@ export class AplRuntime extends EventEmitter {
 
 	private echoInput(x: EchoInputMessage) {
 		if (x.input === this._executeText) {
-			this._echoReceived.notifyAll();
+			this._echoReceived.resolve(undefined);
 		}
 	}
 
@@ -356,12 +369,17 @@ export class AplRuntime extends EventEmitter {
 	}
 
 	private _hadError = 0;
+	private _lastError: { dmx: number; error: number } | undefined;
+	public get lastError() { return this._lastError; }
 	private hadError(x: HadErrorMessage) {
 		this._hadError = x.error;
+		this._lastError = { dmx: x.dmx, error: x.error };
 	}
 
 	private gotoWindow(x: GotoWindowMessage) {
-		this.sendEvent('openWindow', { filename: this._windows[x.win].filename });
+		const win = this._windows[x.win];
+		if (!win) return;
+		this.sendEvent('openWindow', { filename: win.filename });
 	}
 
 	private windowTypeChanged(x: WindowTypeChangedMessage) {
@@ -469,13 +487,13 @@ export class AplRuntime extends EventEmitter {
 	private replyGetSIStack(x: ReplyGetSIStackMessage) {
 		this.log('getSIStack');
 		const frames: IStackFrame[] = x.stack.map((s, i) => {
-			const m = /(.*?)\[(\d+)\]/.exec(s.description) || [];
-			const file = this._linkMap[m[1]];
+			const { name, lineOffset } = parseStackDescription(s.description);
+			const file = this._linkMap[name];
 			return {
 				index: i,
-				name: m[1],
+				name,
 				file: s.filename || file,
-				line: s.fileline + +m[2],
+				line: s.fileline + lineOffset,
 			};
 		});
 		this._siStack.resolve({
@@ -787,7 +805,13 @@ export class AplRuntime extends EventEmitter {
 		const normalizedPath = normPath(filePath);
 		const matched: IAplBreakpoint[] = [];
 		bps.forEach((bp) => {
-			const row = this._linkInfo.find((row) => normPath(row.filePath) === normalizedPath && row.startLine < bp.line);
+			// Find the closest preceding function (largest startLine <= bp.line)
+			let row: typeof this._linkInfo[0] | undefined;
+			for (const r of this._linkInfo) {
+				if (normPath(r.filePath) === normalizedPath && r.startLine <= bp.line) {
+					if (!row || r.startLine > row.startLine) { row = r; }
+				}
+			}
 			if (row) {
 				const lines = fnbp[row.aplName] || [];
 				lines.push(bp.line - row.startLine);
@@ -824,13 +848,13 @@ export class AplRuntime extends EventEmitter {
 	/*
 	 * Clear all breakpoints for file.
 	 */
-	public clearBreakpoints(path: string): void {
+	public async clearBreakpoints(path: string): Promise<void> {
 		const filePath = normPath(path);
 		this._breakPoints.delete(filePath);
 		// Clear stops on ALL functions in this file, not just one
 		for (const row of this._linkInfo) {
 			if (normPath(row.filePath) === filePath) {
-				this.exec(0, `{}⍬ ⎕STOP '${row.aplName}'`);
+				await this.exec(0, `{}⍬ ⎕STOP '${row.aplName}'`, 1);
 			}
 		}
 	}
