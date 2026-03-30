@@ -399,12 +399,37 @@ class AplConfigurationProvider implements vscode.DebugConfigurationProvider {
 		config.internalConsoleOptions = 'neverOpen';
 
 		if (!config.replId) {
-			const activeTab = manager.activeTab;
-			if (!activeTab || !activeTab.session.isConnected) {
-				vscode.window.showInformationMessage("Please connect to a Dyalog interpreter first.");
-				return undefined;
+			if (config.port || config.exe) {
+				// Config specifies how to connect — create a fresh REPL tab
+				const replId = manager.createTab();
+				const tab = manager.getTab(replId)!;
+				vscode.commands.executeCommand('aplRepl.focus');
+				try {
+					if (config.port) {
+						await tab.session.connect(config.host || '127.0.0.1', config.port);
+					} else {
+						await tab.session.spawn(config.exe);
+					}
+					if (!tab.session.isConnected || tab.session.state !== 'connected') {
+						await new Promise<void>((resolve, reject) => {
+							const timeout = setTimeout(() => reject(new Error('timeout')), 10000);
+							tab.session.once('ready', () => { clearTimeout(timeout); resolve(); });
+						});
+					}
+				} catch {
+					vscode.window.showErrorMessage("Failed to start APL interpreter.");
+					return undefined;
+				}
+				config.replId = replId;
+			} else {
+				// No connection info — attach to the focused session
+				const activeTab = manager.activeTab;
+				if (!activeTab || !activeTab.session.isConnected) {
+					vscode.window.showInformationMessage("Please connect to a Dyalog interpreter first.");
+					return undefined;
+				}
+				config.replId = manager.activeReplId;
 			}
-			config.replId = manager.activeReplId;
 		}
 
 		// Update session name to show the REPL number in the debug toolbar
