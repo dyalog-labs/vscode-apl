@@ -47,19 +47,42 @@ async function getStackNames(session: vscode.DebugSession): Promise<string[]> {
 	let workspaceFolder: vscode.WorkspaceFolder;
 
 	suiteSetup(async function () {
-		this.timeout(20000);
+		this.timeout(30000);
 		const folders = vscode.workspace.workspaceFolders;
 		assert.ok(folders && folders.length > 0);
 		workspaceFolder = folders![0];
 
-		const ext = vscode.extensions.getExtension('undefined_publisher.vscode-apl');
-		if (ext && !ext.isActive) { await ext.activate(); }
+		const ext = vscode.extensions.getExtension('undefined_publisher.vscode-apl')!;
+		if (!ext.isActive) { await ext.activate(); }
+		const api = ext.exports;
+
+		// Create a REPL tab and connect to the interpreter
+		await vscode.commands.executeCommand('apl.newRepl');
+		const tab = api.replManager.activeTab;
+		assert.ok(tab, 'REPL tab should exist after apl.newRepl');
+		await tab.handleConnect();
+
+		// Wait for the session to be connected
+		await new Promise<void>((resolve, reject) => {
+			if (tab.session.isConnected) { resolve(); return; }
+			const t = setTimeout(() => reject(new Error('REPL connect timeout')), 15000);
+			tab.session.on('ready', () => { clearTimeout(t); resolve(); });
+		});
+
+		// Link the workspace so functions (test, foo, goo) are loaded
+		const folderPath = workspaceFolder.uri.fsPath.replace(/\\/g, '/');
+		tab.session.execute(`⎕SE.Link.Create '#' '${folderPath}'`);
+		// Give Link time to scan and load the files
+		await new Promise(resolve => setTimeout(resolve, 3000));
 	});
 
 	suiteTeardown(async () => {
 		if (vscode.debug.activeDebugSession) {
 			await vscode.debug.stopDebugging();
 		}
+		// Disconnect the REPL session
+		const ext = vscode.extensions.getExtension('undefined_publisher.vscode-apl');
+		ext?.exports?.replManager?.activeTab?.disconnect();
 	});
 
 	teardown(async function () {
