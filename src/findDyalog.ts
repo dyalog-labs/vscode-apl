@@ -87,10 +87,8 @@ function getAppDataDir(): string | undefined {
 }
 
 /**
- * Find the connections.json from the latest installed Dyalog/Ride version
- * (capped at MAX_DYALOG_VERSION).
- * macOS/Linux: scans Dyalog-{version} directories
- * Windows:     scans Ride-{version} directories
+ * Find the connections.json from the latest installed Dyalog version
+ * (capped at MAX_DYALOG_VERSION). Scans Dyalog-{version} directories.
  */
 export function findConnectionsFile(): string | undefined {
 	const appData = getAppDataDir();
@@ -98,17 +96,13 @@ export function findConnectionsFile(): string | undefined {
 		return undefined;
 	}
 
-	const dirPattern = process.platform === 'win32'
-		? /^Ride-(\d+(?:\.\d+)?)$/
-		: /^Dyalog-(\d+(?:\.\d+)?)$/;
-
 	try {
 		const entries = fs.readdirSync(appData);
 		let bestVersion = 0;
 		let bestPath: string | undefined;
 
 		for (const entry of entries) {
-			const match = entry.match(dirPattern);
+			const match = entry.match(/^Dyalog-(\d+(?:\.\d+)?)$/);
 			if (!match) { continue; }
 			const version = parseFloat(match[1]);
 			if (version > MAX_DYALOG_VERSION) { continue; }
