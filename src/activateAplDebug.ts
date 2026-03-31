@@ -4,10 +4,12 @@
 
 'use strict';
 
+import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { WorkspaceFolder, DebugConfiguration, ProviderResult, CancellationToken } from 'vscode';
 import { AplDebugSession } from './aplDebug';
 import { FileAccessor } from './aplRuntime';
+import { DyalogConnection, findConnectionsFile } from './findDyalog';
 import { ReplManager } from './replManager';
 import { ReplViewProvider } from './replPanel';
 import { AplBacktickHandler } from './aplBacktick';
@@ -18,6 +20,50 @@ let aplStatusBarItem: vscode.StatusBarItem;
 
 export function updateStatusBar(text: string): void {
 	aplStatusBarItem.text = text;
+}
+
+/**
+ * Read Dyalog connections and map them to VS Code debug configurations.
+ */
+function getDyalogDebugConfigs(): DebugConfiguration[] {
+	const connFile = findConnectionsFile();
+	if (!connFile) {
+		return [];
+	}
+
+	try {
+		const raw = fs.readFileSync(connFile, 'utf8');
+		const connections: DyalogConnection[] = JSON.parse(raw);
+		const configs: DebugConfiguration[] = [];
+
+		for (const conn of connections) {
+			if (!conn.name) { continue; }
+
+			if (conn.type === 'start' && conn.exe) {
+				configs.push({
+					type: 'apl',
+					request: 'launch',
+					name: conn.name.trim(),
+					exe: conn.exe,
+					cwd: '${workspaceFolder}',
+					stopOnEntry: true,
+				});
+			} else if (conn.port) {
+				configs.push({
+					type: 'apl',
+					request: 'launch',
+					name: conn.name.trim(),
+					host: conn.host || '127.0.0.1',
+					port: parseInt(conn.port, 10),
+					cwd: '${workspaceFolder}',
+					stopOnEntry: true,
+				});
+			}
+		}
+		return configs;
+	} catch {
+		return [];
+	}
 }
 
 export function activateAplDebug(context: vscode.ExtensionContext) {
@@ -258,13 +304,18 @@ export function activateAplDebug(context: vscode.ExtensionContext) {
 
 	// register a dynamic configuration provider for 'apl' debug type
 	context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('apl', {
-		provideDebugConfigurations(folder: WorkspaceFolder | undefined): ProviderResult<DebugConfiguration[]> {
+		provideDebugConfigurations(_folder: WorkspaceFolder | undefined): ProviderResult<DebugConfiguration[]> {
+			const dyalogConfigs = getDyalogDebugConfigs();
+			if (dyalogConfigs.length > 0) {
+				return dyalogConfigs;
+			}
+			// Fallback when no Dyalog connections.json found
 			return [
 				{
 					name: "APL Launch",
 					request: "launch",
 					type: "apl",
-					program: "${file}"
+					cwd: "${workspaceFolder}"
 				}
 			];
 		}
@@ -328,63 +379,32 @@ class AplConfigurationProvider implements vscode.DebugConfigurationProvider {
 
 		// if launch.json is missing or empty
 		if (!config.type && !config.request && !config.name) {
+			config.type = 'apl';
+			config.name = 'Launch';
+			config.request = 'launch';
+			config.cwd = folder?.uri.fsPath;
+			config.stopOnEntry = true;
+		}
+
+		// Set program from active editor if available
+		if (!config.program) {
 			const editor = vscode.window.activeTextEditor;
 			if (editor && editor.document.languageId === 'apl') {
-				config.type = 'apl';
-				config.name = 'Launch';
-				config.request = 'launch';
-				config.program = '${file}';
-				config.cwd = folder?.uri.fsPath;
-				config.stopOnEntry = true;
+				config.program = editor.document.uri.fsPath;
 			}
 		}
 
-		// Ensure a connected REPL session exists
+		// Attach to the focused session
 		const manager = ReplManager.getInstance();
 		config.internalConsoleOptions = 'neverOpen';
 
 		if (!config.replId) {
-			// Standalone launch — always create a fresh REPL tab
-			const replId = manager.createTab();
-			const tab = manager.getTab(replId)!;
-			vscode.commands.executeCommand('aplRepl.focus');
-			try {
-				await tab.handleConnect();
-				// Wait for the interpreter to be fully ready (SetPromptType)
-				if (!tab.session.isConnected || tab.session.state !== 'connected') {
-					await new Promise<void>((resolve, reject) => {
-						const timeout = setTimeout(() => reject(new Error('timeout')), 10000);
-						tab.session.once('ready', () => { clearTimeout(timeout); resolve(); });
-					});
-				}
-			} catch {
-				vscode.window.showErrorMessage("Failed to start APL interpreter.");
+			const activeTab = manager.activeTab;
+			if (!activeTab || !activeTab.session.isConnected) {
+				vscode.window.showInformationMessage("Please connect to a Dyalog interpreter first.");
 				return undefined;
 			}
-			config.replId = replId;
-
-			// Auto-link workspace folder in the fresh session
-			const linkFolder = folder?.uri.fsPath || config.cwd;
-			if (linkFolder) {
-				const folderPath = linkFolder.replace(/\\/g, '/');
-				// Must await: getLinkInfo() in launchRequest needs Link to be done
-				await this._execAndWait(tab, `)clear`);
-				await this._execAndWait(tab, `⎕SE.Link.Create '#' '${folderPath}'`);
-			}
-		}
-
-		// Set cwd from workspace folder if not provided
-		if (!config.cwd) {
-			if (folder) {
-				config.cwd = folder.uri.fsPath;
-			} else if (config.program) {
-				// Try to find workspace folder containing the program
-				const programUri = vscode.Uri.file(config.program);
-				const wsFolder = vscode.workspace.getWorkspaceFolder(programUri);
-				if (wsFolder) {
-					config.cwd = wsFolder.uri.fsPath;
-				}
-			}
+			config.replId = manager.activeReplId;
 		}
 
 		// Update session name to show the REPL number in the debug toolbar
@@ -393,38 +413,15 @@ class AplConfigurationProvider implements vscode.DebugConfigurationProvider {
 			config.name = tab.label;
 		}
 
-		if (!config.program && !config.cwd) {
-			vscode.window.showInformationMessage("Cannot find a program to debug");
+		if (!config.program) {
+			vscode.window.showInformationMessage("Please open an APL file to debug.");
 			return undefined;
 		}
 
 		return config;
 	}
 
-	/** Execute APL and wait for the echo before continuing. */
-	private _execAndWait(tab: import('./replTab').ReplTab, expression: string): Promise<void> {
-		return new Promise<void>(resolve => {
-			const session = tab.session;
-			if (!session.isConnected) { resolve(); return; }
 
-			const text = expression.endsWith('\n') ? expression : `${expression}\n`;
-			const handler = (input: string) => {
-				if (input === text) {
-					session.removeListener('echo', handler);
-					clearTimeout(timer);
-					resolve();
-				}
-			};
-			session.on('echo', handler);
-
-			const timer = setTimeout(() => {
-				session.removeListener('echo', handler);
-				resolve();
-			}, 10000);
-
-			session.execute(expression);
-		});
-	}
 }
 
 export const workspaceFileAccessor: FileAccessor = {

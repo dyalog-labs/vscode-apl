@@ -219,10 +219,14 @@ export class AplRuntime extends EventEmitter {
 			fs.mkdirSync(linkDir, { recursive: true });
 		}
 		await this._fileAccessor.deleteFile(this._link).catch(this.err);
-		await this.exec(0, `{}(⊂⎕JSON ⍕¨¨5177⌶⍬)⎕NPUT '${this._link}' 1`, 1);
-		return this._fileAccessor.checkExists(this._link, 5000)
-		.then(() => this._fileAccessor.readFile(this._link))
-		.then((data) => {
+		// Only write link.json if Link is active (5177⌶ returns non-empty)
+		await this.exec(0, `{0=≢⍵:⍬ ⋄ (⊂⎕JSON ⍕¨¨⍵)⎕NPUT '${this._link}' 1}5177⌶⍬`, 1);
+		if (!fs.existsSync(this._link)) {
+			// No Link active — leave linkInfo empty
+			return;
+		}
+		try {
+			const data = await this._fileAccessor.readFile(this._link);
 			const json = new TextDecoder().decode(data);
 			const map: Record<string, string> = {};
 			this._linkInfo = JSON.parse(json).map((row: string[]) => {
@@ -234,7 +238,9 @@ export class AplRuntime extends EventEmitter {
 				return { aplName, filePath, startLine };
 			});
 			this._linkMap = map;
-		}).catch(this.err);
+		} catch (e) {
+			this.err(e as Error);
+		}
 	}
 	
 	private async initialiseBreakpoints() {
