@@ -68,6 +68,8 @@ function getDyalogDebugConfigs(): DebugConfiguration[] {
 
 export function activateAplDebug(context: vscode.ExtensionContext) {
 
+	let lastStepTime = 0;
+
 	// create a new status bar item that we can now manage
 	aplStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
 	aplStatusBarItem.show();
@@ -281,12 +283,14 @@ export function activateAplDebug(context: vscode.ExtensionContext) {
 				const st = await ds.customRequest('stackTrace', { threadId: 1, startFrame: 0, levels: 1 });
 				const topFrame = st.stackFrames?.[0];
 				if (topFrame?.source?.path && editor.document.uri.fsPath === topFrame.source.path && editor.selection.active.line === topFrame.line - 1) {
+					lastStepTime = Date.now();
 					vscode.commands.executeCommand('workbench.action.debug.stepOver');
-				} else {
+				} else if (Date.now() - lastStepTime > 300) {
 					vscode.commands.executeCommand('type', { text: '\n' });
 				}
 			} catch {
-				vscode.commands.executeCommand('type', { text: '\n' });
+				// Debugger is running (step in flight) — swallow Enter to prevent
+				// accidental newline insertion in the tracer
 			}
 		})
 	);

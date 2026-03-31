@@ -123,7 +123,7 @@
       {
         "command": "apl.smartStepOver",
         "key": "enter",
-        "when": "debugState == 'stopped' && editorTextFocus"
+        "when": "inDebugMode && debugType == 'apl' && editorTextFocus"
       },
       {
         "command": "workbench.action.debug.stepInto",
