@@ -29,6 +29,12 @@
 	let aplKeyMap = null;       // Map: key -> {char, name, category}
 	let aplKeyEntries = null;   // Array of all entries (for language bar)
 
+	// Reverse search state (Ctrl+R)
+	let reverseSearchActive = false;
+	let reverseSearchQuery = '';
+	let reverseSearchMatchIndex = -1;  // index into inputHistory (from end)
+	let reverseSearchOverlay = null;
+
 	// Initialize
 	function init() {
 		// Notify extension that the webview is ready
@@ -148,7 +154,7 @@
 
 	// Handle keyboard input
 	function handleKeyDown(e) {
-		// --- Backtick prefix mode handling ---
+		// --- Backtick prefix mode handling (works in both normal and reverse search) ---
 		if (prefixMode) {
 			// Ignore modifier-only keys (Shift, Ctrl, Alt, Meta) — wait for the actual character
 			if (e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt' || e.key === 'Meta') {
@@ -186,6 +192,55 @@
 			e.preventDefault();
 			e.stopPropagation();
 			setPrefixMode(true);
+			return;
+		}
+
+		// --- Reverse search mode handling ---
+		if (reverseSearchActive) {
+			if (e.key === 'Escape') {
+				e.preventDefault();
+				e.stopPropagation();
+				exitReverseSearch(false);
+				return;
+			} else if (e.key === 'Enter') {
+				e.preventDefault();
+				e.stopPropagation();
+				exitReverseSearch(true);
+				return;
+			} else if (e.key === 'r' && e.ctrlKey) {
+				e.preventDefault();
+				e.stopPropagation();
+				cycleReverseSearch();
+				return;
+			} else if (e.key === 'Backspace') {
+				e.preventDefault();
+				e.stopPropagation();
+				if (reverseSearchQuery.length > 0) {
+					reverseSearchQuery = reverseSearchQuery.slice(0, -1);
+					updateReverseSearch();
+				}
+				return;
+			} else if (e.key.length === 1) {
+				// Accept any printable character, including APL glyphs via AltGr/APL key
+				e.preventDefault();
+				e.stopPropagation();
+				reverseSearchQuery += e.key;
+				updateReverseSearch();
+				return;
+			} else if (e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt' || e.key === 'Meta'
+				|| e.key === 'AltGraph') {
+				return;
+			} else {
+				exitReverseSearch(true);
+				return;
+			}
+		}
+
+		// Ctrl+R: enter reverse search
+		if (e.key === 'r' && e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+			e.preventDefault();
+			e.stopPropagation();
+			enterReverseSearch();
 			return;
 		}
 
@@ -355,6 +410,122 @@
 		// Resize textarea without calling handleInput (which resets historyIndex)
 		inputEl.style.height = 'auto';
 		inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + 'px';
+	}
+
+	// --- Reverse search (Ctrl+R) ---
+
+	function enterReverseSearch() {
+		reverseSearchActive = true;
+		reverseSearchQuery = '';
+		reverseSearchMatchIndex = -1;
+
+		// Create overlay
+		reverseSearchOverlay = document.createElement('div');
+		reverseSearchOverlay.id = 'reverse-search';
+		reverseSearchOverlay.innerHTML =
+			'<span class="reverse-search-label">(reverse-i-search)</span>' +
+			'<span class="reverse-search-query"></span>' +
+			'<span class="reverse-search-sep">: </span>' +
+			'<span class="reverse-search-match"></span>';
+		document.getElementById('input-area').appendChild(reverseSearchOverlay);
+
+		// Hide prompt; make input invisible but keep it focusable for key events
+		document.getElementById('prompt').style.display = 'none';
+		inputEl.style.opacity = '0';
+		inputEl.style.position = 'absolute';
+		inputEl.style.pointerEvents = 'none';
+		inputEl.focus();
+	}
+
+	function exitReverseSearch(accept) {
+		if (!reverseSearchActive) return;
+		reverseSearchActive = false;
+
+		// If accepting, put the matched text into the input
+		if (accept && reverseSearchMatchIndex >= 0 && reverseSearchMatchIndex < inputHistory.length) {
+			inputEl.value = inputHistory[reverseSearchMatchIndex];
+			inputEl.selectionStart = inputEl.selectionEnd = inputEl.value.length;
+			// Resize textarea
+			inputEl.style.height = 'auto';
+			inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + 'px';
+		}
+
+		// Remove overlay and restore input
+		if (reverseSearchOverlay) {
+			reverseSearchOverlay.remove();
+			reverseSearchOverlay = null;
+		}
+		document.getElementById('prompt').style.display = '';
+		inputEl.style.opacity = '';
+		inputEl.style.position = '';
+		inputEl.style.pointerEvents = '';
+		inputEl.focus();
+
+		historyIndex = -1;
+		currentInput = '';
+	}
+
+	function updateReverseSearch() {
+		if (!reverseSearchOverlay) return;
+
+		const queryEl = reverseSearchOverlay.querySelector('.reverse-search-query');
+		const matchEl = reverseSearchOverlay.querySelector('.reverse-search-match');
+		const labelEl = reverseSearchOverlay.querySelector('.reverse-search-label');
+		queryEl.textContent = reverseSearchQuery;
+
+		if (reverseSearchQuery === '') {
+			matchEl.textContent = '';
+			labelEl.textContent = '(reverse-i-search)';
+			reverseSearchMatchIndex = -1;
+			return;
+		}
+
+		// If we have a current match, check if it still matches the refined query;
+		// otherwise search backwards from the end
+		const startFrom = reverseSearchMatchIndex >= 0
+			? reverseSearchMatchIndex
+			: inputHistory.length - 1;
+
+		const found = findReverseMatch(startFrom);
+		if (found >= 0) {
+			reverseSearchMatchIndex = found;
+			matchEl.textContent = inputHistory[found];
+			labelEl.textContent = '(reverse-i-search)';
+		} else {
+			reverseSearchMatchIndex = -1;
+			matchEl.textContent = '';
+			labelEl.textContent = '(failing reverse-i-search)';
+		}
+	}
+
+	function cycleReverseSearch() {
+		if (!reverseSearchOverlay || reverseSearchQuery === '') return;
+
+		const matchEl = reverseSearchOverlay.querySelector('.reverse-search-match');
+		const labelEl = reverseSearchOverlay.querySelector('.reverse-search-label');
+
+		const startFrom = reverseSearchMatchIndex >= 0
+			? reverseSearchMatchIndex - 1
+			: inputHistory.length - 1;
+
+		const found = findReverseMatch(startFrom);
+		if (found >= 0) {
+			reverseSearchMatchIndex = found;
+			matchEl.textContent = inputHistory[found];
+			labelEl.textContent = '(reverse-i-search)';
+		} else {
+			labelEl.textContent = '(failing reverse-i-search)';
+		}
+	}
+
+	function findReverseMatch(startFrom) {
+		const query = reverseSearchQuery.toLowerCase();
+		for (let i = startFrom; i >= 0; i--) {
+			if (inputHistory[i].toLowerCase().indexOf(query) !== -1) {
+				return i;
+			}
+		}
+		return -1;
 	}
 
 	// Connect to interpreter
@@ -560,6 +731,11 @@
 	// --- Backtick prefix mode helpers ---
 
 	function insertAtCursor(text) {
+		if (reverseSearchActive) {
+			reverseSearchQuery += text;
+			updateReverseSearch();
+			return;
+		}
 		const start = inputEl.selectionStart;
 		const end = inputEl.selectionEnd;
 		const value = inputEl.value;
