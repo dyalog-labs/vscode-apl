@@ -50,6 +50,16 @@ export class AplSession extends EventEmitter {
 	 * Used by AplRuntime when attaching to an existing session.
 	 */
 	public setDebugHandler(handler: (command: string, args: any) => void): void {
+		// Flush any queued messages with the current (old) handler state before
+		// switching.  This prevents a race where messages already in _messageQueue
+		// (waiting on the 20 ms debounce) would be processed *after* the handler
+		// is set, bypassing _pendingDebugMessages and reaching the runtime before
+		// _linkMap is populated.
+		if (this._rundownTimeout) {
+			clearTimeout(this._rundownTimeout);
+			this._rundownTimeout = 0;
+		}
+		this.rundown();
 		this._debugHandler = handler;
 	}
 
