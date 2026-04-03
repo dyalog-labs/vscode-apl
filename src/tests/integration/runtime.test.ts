@@ -2,6 +2,7 @@ import assert = require('assert');
 import Path = require('path');
 import { AplRuntime, FileAccessor } from '../../aplRuntime';
 import { AplSession } from '../../aplSession';
+import { AplDebugSession } from '../../aplDebug';
 import { MockRideServer } from '../helpers/mockRideServer';
 import { normPath } from '../../utils';
 
@@ -965,5 +966,66 @@ suite('AplRuntime — exec timeout', () => {
 		const elapsed = Date.now() - start;
 
 		assert.ok(elapsed < 100, `should resolve immediately, took ${elapsed}ms`);
+	});
+});
+
+// ─── DAP setBreakpoints uses args.breakpoints ───────────────────────
+
+suite('AplDebugSession — setBreakpoints uses args.breakpoints', () => {
+	let server: MockRideServer;
+	let session: AplSession;
+	let debugSession: AplDebugSession;
+
+	setup(async () => {
+		server = new MockRideServer();
+		await server.start();
+		session = new AplSession();
+		const readyPromise = new Promise<void>(resolve => {
+			session.once('ready', resolve);
+		});
+		await session.connect('127.0.0.1', server.port);
+		await readyPromise;
+
+		debugSession = new AplDebugSession(mockFileAccessor);
+		(debugSession as any).sendResponse = () => {};
+
+		const runtime = (debugSession as any)._runtime;
+		(runtime as any)._session = session;
+		session.setDebugHandler((command: string, args: any) => {
+			(runtime as any).handleMessage([command, args]);
+		});
+		(runtime as any)._linkInfo = [
+			{ aplName: 'MyFunc', filePath: '/test/file.aplf', startLine: 0 }
+		];
+	});
+
+	teardown(() => {
+		session.clearDebugHandler();
+		session.disconnect();
+		server.stop();
+	});
+
+	test('disabled breakpoint in args.lines is ignored when args.breakpoints excludes it', async () => {
+		const response = { body: {} } as any;
+		// Simulate VS Code sending setBreakpoints after disabling line 5:
+		// args.lines (deprecated) still has both, args.breakpoints has only the enabled one
+		const args = {
+			source: { path: '/test/file.aplf' },
+			lines: [3, 5],
+			breakpoints: [{ line: 3 }]
+		};
+
+		await (debugSession as any).setBreakPointsRequest(response, args);
+
+		const stopCmds = server.getReceived('Execute')
+			.filter((m: any) => m.text.includes('⎕STOP') && !m.text.includes('⍬'));
+		const lastStop = stopCmds[stopCmds.length - 1];
+		assert.ok(lastStop, 'should have sent ⎕STOP');
+		// Client line 3 → debugger line 2 → offset 2: should be present
+		assert.ok(lastStop.text.includes('2'),
+			`enabled breakpoint (offset 2) should appear in ⎕STOP, got: ${lastStop.text}`);
+		// Client line 5 → debugger line 4 → offset 4: should NOT be present
+		assert.ok(!lastStop.text.includes('4'),
+			`disabled breakpoint (offset 4) should not appear in ⎕STOP, got: ${lastStop.text}`);
 	});
 });

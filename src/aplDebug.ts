@@ -274,7 +274,7 @@ export class AplDebugSession extends LoggingDebugSession {
 	protected async setBreakPointsRequest(response: DebugProtocol.SetBreakpointsResponse, args: DebugProtocol.SetBreakpointsArguments): Promise<void> {
 
 		const path = args.source.path as string;
-		const clientLines = args.lines || [];
+		const clientLines = (args.breakpoints || []).map(bp => bp.line);
 
 		// clear all breakpoints for this file
 		await this._runtime.clearBreakpoints(path);
