@@ -422,6 +422,48 @@ body {
 	border-color: var(--vscode-panel-border);
 }
 
+/* Reverse search overlay (Ctrl+R) */
+#reverse-search {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	min-height: 40px;
+	display: flex;
+	align-items: center;
+	padding: 8px 8px;
+	background: var(--input-bg);
+	border-top: 1px solid var(--vscode-focusBorder);
+	font-family: inherit;
+	font-size: inherit;
+	line-height: 1.4;
+	z-index: 50;
+	overflow: hidden;
+	white-space: nowrap;
+}
+
+.reverse-search-label {
+	color: var(--vscode-descriptionForeground);
+	flex-shrink: 0;
+}
+
+.reverse-search-query {
+	color: var(--vscode-textLink-foreground);
+	font-weight: bold;
+	flex-shrink: 0;
+}
+
+.reverse-search-sep {
+	color: var(--vscode-descriptionForeground);
+	flex-shrink: 0;
+}
+
+.reverse-search-match {
+	color: var(--input-fg);
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
 /* Value tip tooltip */
 .value-tip {
 	position: fixed;
