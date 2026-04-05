@@ -118,6 +118,13 @@ export class AplRuntime extends EventEmitter {
 	private _execTimeoutMs = 10000;
 	private _windows: OpenWindowMessage[] = [];
 
+	// Interpreter prompt type: 0 = running/busy, 1 = session prompt, 4 = trace prompt
+	// Default to 1 (not busy) — the interpreter will send SetPromptType(0) when
+	// it starts running.  This avoids requiring every attach path to force the value.
+	private _promptType = 1;
+	/** True when the interpreter is executing and cannot process ⎕STOP immediately. */
+	public get isBusy(): boolean { return this._promptType === 0; }
+
 
 	constructor(private _fileAccessor: FileAccessor) {
 		super();
@@ -142,6 +149,10 @@ export class AplRuntime extends EventEmitter {
 
 		// Get link info from existing session
 		await this.getLinkInfo();
+		// exec() inside getLinkInfo causes SetPromptType(0→1) but the final
+		// SetPromptType may lag behind due to the message queue debounce.
+		// Force not-busy so initialiseBreakpoints uses the blocking path.
+		this._promptType = 1;
 
 		// If a program was specified, fix it first (before setting breakpoints)
 		if (this._sourceFile) {
@@ -205,6 +216,11 @@ export class AplRuntime extends EventEmitter {
 		// Get link info from existing session (interpreter can execute while suspended)
 		this.log('attachToSuspendedSession: getting link info...');
 		await this.getLinkInfo();
+		// Same debounce race as attachToSession — force not-busy.
+		this._promptType = 4;
+
+		// Sync breakpoints now that linkInfo is available
+		await this.initialiseBreakpoints();
 
 		this.log(`attachToSuspendedSession: replaying ${session.pendingDebugMessageCount} buffered messages`);
 		// Replay the buffered messages (OpenWindow, HadError, SetHighlightLine)
@@ -218,8 +234,11 @@ export class AplRuntime extends EventEmitter {
 		if (!fs.existsSync(linkDir)) {
 			fs.mkdirSync(linkDir, { recursive: true });
 		}
-		await this._fileAccessor.deleteFile(this._link).catch(this.err);
-		// Only write link.json if Link is active (5177⌶ returns non-empty)
+		// Try to refresh link.json from the interpreter.  Do NOT delete the
+		// existing file first: when the interpreter is suspended (auto-debug),
+		// 5177⌶ may return empty and the guard `0=≢⍵:⍬` skips the write.
+		// Keeping the old file lets us fall back to the link info that
+		// ReplBreakpointSync wrote before the debug session started.
 		await this.exec(0, `{0=≢⍵:⍬ ⋄ (⊂⎕JSON ⍕¨¨⍵)⎕NPUT '${this._link}' 1}5177⌶⍬`, 1);
 		if (!fs.existsSync(this._link)) {
 			// No Link active — leave linkInfo empty
@@ -372,6 +391,7 @@ export class AplRuntime extends EventEmitter {
 	}
 
 	private setPromptType(x: SetPromptTypeMessage) {
+		this._promptType = x.type;
 	}
 
 	private _hadError = 0;
@@ -450,9 +470,11 @@ export class AplRuntime extends EventEmitter {
 		delete this._windows[x.win];
 		this.sendEvent('closeWindow', { filename });
 
-		// Auto-terminate: if this was an auto-debug session and all tracer windows are closed,
-		// the suspension has been resolved (user continued, reset, or cut back)
-		if (this._autoDebug && !this._hasOpenWindows()) {
+		// Auto-terminate: if this was an auto-debug session and all tracer windows
+		// are closed, the suspension has been resolved.  But keep the session
+		// alive when breakpoints are still set — the next ⎕STOP hit will reopen
+		// a tracer window and we need to be here to handle it.
+		if (this._autoDebug && !this._hasOpenWindows() && this._breakPoints.size === 0) {
 			this._autoDebug = false;
 			this.sendEvent('end');
 		}
@@ -804,7 +826,7 @@ export class AplRuntime extends EventEmitter {
 	}
 
 	private async setBreakPointOnFile(bps: IAplBreakpoint[], filePath: string): Promise<void> {
-		const fnbp = {};
+		const fnbp: Record<string, number[]> = {};
 		if (this._linkInfo.length === 0) {
 			return;
 		}
@@ -825,6 +847,17 @@ export class AplRuntime extends EventEmitter {
 				matched.push(bp);
 			}
 		});
+
+		if (this.isBusy) {
+			// Interpreter is running — send fire-and-forget (no echo wait).
+			// Commands queue in the interpreter and execute when it's free.
+			for (const aplName of Object.keys(fnbp)) {
+				const lines = fnbp[aplName].join(' ');
+				this.send('Execute', { trace: 0, text: `{}${lines} ⎕STOP '${aplName}'\n` });
+			}
+			return;
+		}
+
 		for (const aplName of Object.keys(fnbp)) {
 			const lines = fnbp[aplName].join(' ');
 			await this.exec(0, `{}${lines} ⎕STOP '${aplName}'`, 1);
@@ -857,6 +890,17 @@ export class AplRuntime extends EventEmitter {
 	public async clearBreakpoints(path: string): Promise<void> {
 		const filePath = normPath(path);
 		this._breakPoints.delete(filePath);
+
+		if (this.isBusy) {
+			// Fire-and-forget while interpreter is running
+			for (const row of this._linkInfo) {
+				if (normPath(row.filePath) === filePath) {
+					this.send('Execute', { trace: 0, text: `{}⍬ ⎕STOP '${row.aplName}'\n` });
+				}
+			}
+			return;
+		}
+
 		// Clear stops on ALL functions in this file, not just one
 		for (const row of this._linkInfo) {
 			if (normPath(row.filePath) === filePath) {
