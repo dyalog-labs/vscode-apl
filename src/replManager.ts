@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { AplSession } from './aplSession';
+import { EvalServer } from './evalServer';
 import { ReplTab } from './replTab';
 import { updateStatusBar } from './activateAplDebug';
 
@@ -18,6 +19,7 @@ export class ReplManager implements vscode.Disposable {
 	private _tabOrder: string[] = [];
 	private _activeTabId: string | undefined;
 	private _context!: vscode.ExtensionContext;
+	private _evalServer?: EvalServer;
 
 	// Shared input history (persisted in globalState)
 	private _inputHistory: string[] = [];
@@ -207,7 +209,19 @@ export class ReplManager implements vscode.Disposable {
 		this.getTab(replId)?.editWindowManager.closeTempTab(filename);
 	}
 
+	public startEvalServer(): void {
+		if (!this._evalServer) {
+			this._evalServer = new EvalServer(this);
+		}
+		this._evalServer.start();
+	}
+
+	public stopEvalServer(): void {
+		this._evalServer?.stop();
+	}
+
 	public dispose(): void {
+		this.stopEvalServer();
 		for (const tab of this._tabs.values()) {
 			tab.dispose();
 		}

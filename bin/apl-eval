@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# apl-eval — lightweight client for the vscode-apl eval server
+# Usage: apl-eval [port] <expression>
+#   apl-eval '1+1'
+#   apl-eval 5555 '⍳10'
+
+PORT=4502
+
+if [ $# -eq 2 ]; then
+  PORT=$1; shift
+fi
+
+if [ -z "$1" ]; then
+  echo "Usage: apl-eval [port] <expression>" >&2
+  exit 1
+fi
+
+exec 3<>/dev/tcp/127.0.0.1/"$PORT"
+echo "$1" >&3
+read -d $'\0' reply <&3
+echo "$reply"
+exec 3>&-
