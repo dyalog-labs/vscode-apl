@@ -32,6 +32,8 @@ export class EditWindowManager implements vscode.Disposable {
 	private _editWindows = new Map<number, EditWindowEntry>();
 	/** Reverse lookup: URI string → RIDE token */
 	private _editWindowsByUri = new Map<string, number>();
+	/** Debounced serialisation timers, keyed by token */
+	private _serialiseTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
 	private _disposables: vscode.Disposable[] = [];
 
@@ -107,7 +109,7 @@ export class EditWindowManager implements vscode.Disposable {
 			fs.mkdirSync(tmpDir, { recursive: true });
 
 			const safeName = name.replace(/[⎕#./\\:*?"<>|]/g, '_');
-			const filepath = Path.join(tmpDir, `${safeName}_${token}.apl`);
+			const filepath = Path.join(tmpDir, `${safeName}.apl`);
 			fs.writeFileSync(filepath, content, 'utf-8');
 
 			uri = vscode.Uri.file(filepath);
@@ -154,19 +156,29 @@ export class EditWindowManager implements vscode.Disposable {
 			);
 			if (doc?.isDirty) { return; }
 
+			const content = (args.text || []).join('\n');
+			if (doc && doc.getText() !== content) {
+				fs.writeFileSync(entry.uri.fsPath, content, 'utf-8');
+			}
+
+			// Debounce: once updates stop, re-serialise to array notation
 			if (VARIABLE_ENTITY_TYPES.has(entry.entityType)) {
-				// Re-serialise to array notation instead of using display form
-				await this._serialiseToFile(entry.name, entry.uri.fsPath);
-			} else {
-				const content = (args.text || []).join('\n');
-				if (doc && doc.getText() !== content) {
-					fs.writeFileSync(entry.uri.fsPath, content, 'utf-8');
-				}
+				this._debouncedSerialise(args.token, entry.name, entry.uri.fsPath);
 			}
 		}
 	}
 
-	// --- Serialise helper ---
+	// --- Serialise helpers ---
+
+	private _debouncedSerialise(token: number, name: string, fsPath: string): void {
+		const prev = this._serialiseTimers.get(token);
+		if (prev) { clearTimeout(prev); }
+
+		this._serialiseTimers.set(token, setTimeout(() => {
+			this._serialiseTimers.delete(token);
+			this._serialiseToFile(name, fsPath);
+		}, 500));
+	}
 
 	private _serialiseToFile(name: string, fsPath: string): Promise<void> {
 		const aplPath = fsPath.replace(/\\/g, '/');
@@ -214,6 +226,8 @@ export class EditWindowManager implements vscode.Disposable {
 		if (token === undefined) { return; }
 
 		this._session.sendMessage('CloseWindow', { win: token });
+		const timer = this._serialiseTimers.get(token);
+		if (timer) { clearTimeout(timer); this._serialiseTimers.delete(token); }
 
 		const entry = this._editWindows.get(token);
 		if (entry?.tempFile) {
@@ -227,6 +241,9 @@ export class EditWindowManager implements vscode.Disposable {
 	private _handleCloseEditWindow(win: number): void {
 		const entry = this._editWindows.get(win);
 		if (!entry) { return; }
+
+		const timer = this._serialiseTimers.get(win);
+		if (timer) { clearTimeout(timer); this._serialiseTimers.delete(win); }
 
 		const uriStr = entry.uri.toString();
 
@@ -260,6 +277,8 @@ export class EditWindowManager implements vscode.Disposable {
 		}
 		this._editWindows.clear();
 		this._editWindowsByUri.clear();
+		for (const t of this._serialiseTimers.values()) { clearTimeout(t); }
+		this._serialiseTimers.clear();
 
 		this._disposables.forEach(d => d.dispose());
 		this._disposables = [];
