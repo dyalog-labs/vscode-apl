@@ -305,14 +305,15 @@ export function activateAplDebug(context: vscode.ExtensionContext) {
 	const provider = new AplConfigurationProvider();
 	context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('apl', provider));
 
-	// register a dynamic configuration provider for 'apl' debug type
-	context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('apl', {
+	// Register a configuration provider that discovers Dyalog connections.
+	// Initial: used when there's no launch.json (F5 shows a picker).
+	// Dynamic: configs appear in the debug dropdown alongside launch.json entries.
+	const dyalogConfigProvider = {
 		provideDebugConfigurations(_folder: WorkspaceFolder | undefined): ProviderResult<DebugConfiguration[]> {
 			const dyalogConfigs = getDyalogDebugConfigs();
 			if (dyalogConfigs.length > 0) {
 				return dyalogConfigs;
 			}
-			// Fallback when no Dyalog connections.json found
 			return [
 				{
 					name: "APL Launch",
@@ -322,7 +323,11 @@ export function activateAplDebug(context: vscode.ExtensionContext) {
 				}
 			];
 		}
-	}, vscode.DebugConfigurationProviderTriggerKind.Dynamic));
+	};
+	context.subscriptions.push(
+		vscode.debug.registerDebugConfigurationProvider('apl', dyalogConfigProvider, vscode.DebugConfigurationProviderTriggerKind.Initial),
+		vscode.debug.registerDebugConfigurationProvider('apl', dyalogConfigProvider, vscode.DebugConfigurationProviderTriggerKind.Dynamic),
+	);
 
 	context.subscriptions.push(vscode.debug.registerDebugAdapterDescriptorFactory('apl', new InlineDebugAdapterFactory()));
 	context.subscriptions.push(vscode.debug.onDidReceiveDebugSessionCustomEvent((customEvent) => {
@@ -385,12 +390,18 @@ class AplConfigurationProvider implements vscode.DebugConfigurationProvider {
 			config.type = 'apl';
 			config.name = 'Launch';
 			config.request = 'launch';
-			config.cwd = folder?.uri.fsPath;
 			config.stopOnEntry = true;
 		}
 
-		// Set program from active editor if available
-		if (!config.program) {
+		// Ensure cwd is always set — commands like "Run and Debug" don't include it
+		if (!config.cwd) {
+			config.cwd = folder?.uri.fsPath || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		}
+
+		// Set program from active editor when not specified at all (F5 with
+		// no launch.json).  Skip when program is explicitly "" (workspace
+		// debug) or when traceExpression is set (REPL Ctrl+Enter).
+		if (config.program == null && !config.traceExpression) {
 			const editor = vscode.window.activeTextEditor;
 			if (editor && editor.document.languageId === 'apl') {
 				config.program = editor.document.uri.fsPath;
@@ -416,7 +427,7 @@ class AplConfigurationProvider implements vscode.DebugConfigurationProvider {
 			config.name = tab.label;
 		}
 
-		if (!config.program) {
+		if (config.program == null && !config.traceExpression) {
 			vscode.window.showInformationMessage("Please open an APL file to debug.");
 			return undefined;
 		}

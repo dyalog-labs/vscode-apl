@@ -4,6 +4,7 @@
 
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as Path from 'path';
 import { AplSession } from './aplSession';
 import { normPath, PendingRequest, PendingRequests } from './utils';
@@ -143,7 +144,16 @@ export class AplRuntime extends EventEmitter {
 		// Get link info from existing session
 		await this.getLinkInfo();
 
-		// If a program was specified, fix it first (before setting breakpoints)
+		// Debugging a file requires Link — without it there's no mapping
+		// between file lines and APL functions for breakpoints and source
+		// navigation.  REPL tracing (Ctrl+Enter) works without Link since
+		// the function just needs to exist in the workspace.
+		if (this._sourceFile && this._linkInfo.length === 0) {
+			this.detachFromSession();
+			throw new Error('Link is not active. Please link your workspace to debug files.');
+		}
+
+		// ⎕FIX the file to ensure the latest save is loaded (Link may lag)
 		if (this._sourceFile) {
 			await this.exec(0, `name←⊃2 ⎕FIX 'file://${this._sourceFile}'`, 1);
 		}
@@ -151,13 +161,14 @@ export class AplRuntime extends EventEmitter {
 		// Set breakpoints AFTER ⎕FIX (⎕FIX clears stops on the function)
 		await this.initialiseBreakpoints();
 
-		// Now run the program
 		if (this._sourceFile) {
-			await this.exec(this._trace ? 1 : 0, '⍎name', 1);
-		} else {
-			// No program - just emit stopOnEntry if requested
 			if (this._trace) {
-				this.emit('stopOnEntry');
+				// stopOnEntry: add line 1 to existing stops and execute.
+				// (1,⎕STOP name) preserves breakpoints set by initialiseBreakpoints.
+				// Don't await — the interpreter suspends at the first stop.
+				this.exec(0, '{}(1,⎕STOP name)⎕STOP name ⋄ ⍎name');
+			} else {
+				await this.exec(0, '⍎name', 1);
 			}
 		}
 	}
@@ -219,8 +230,14 @@ export class AplRuntime extends EventEmitter {
 			fs.mkdirSync(linkDir, { recursive: true });
 		}
 		await this._fileAccessor.deleteFile(this._link).catch(this.err);
-		// Only write link.json if Link is active (5177⌶ returns non-empty)
-		await this.exec(0, `{0=≢⍵:⍬ ⋄ (⊂⎕JSON ⍕¨¨⍵)⎕NPUT '${this._link}' 1}5177⌶⍬`, 1);
+		// Only write link.json if Link is active (5177⌶ returns non-empty).
+		// The echo arrives on receipt, not on completion — send a no-op
+		// afterward so its echo confirms the file write is done.
+		// Guard with ⎕SE.Link.Links (actual link state) — 5177⌶ can return
+		// stale entries after unlinking.  6:: catches VALUE ERROR if Link
+		// API is unavailable.
+		await this.exec(0, `{6::⍬ ⋄ 0=≢⎕SE.Link.Links:⍬ ⋄ r←5177⌶⍬ ⋄ 0=≢r:⍬ ⋄ (⊂⎕JSON ⍕¨¨r)⎕NPUT '${this._link}' 1}⍬`, 1);
+		await this.exec(0, '⍬', 1);
 		if (!fs.existsSync(this._link)) {
 			// No Link active — leave linkInfo empty
 			return;
@@ -229,7 +246,9 @@ export class AplRuntime extends EventEmitter {
 			const data = await this._fileAccessor.readFile(this._link);
 			const json = new TextDecoder().decode(data);
 			const map: Record<string, string> = {};
-			this._linkInfo = JSON.parse(json).map((row: string[]) => {
+			this._linkInfo = JSON.parse(json)
+				.filter((row: string[]) => row[1] !== '⎕SE')  // exclude Dyalog internals
+				.map((row: string[]) => {
 				const aplName = row[0][0] === '#' ? row[0] : `${row[1]}.${row[0]}`;
 				const filePath = Path.resolve(row[3]);
 				const startLine = +row[4];
@@ -244,11 +263,10 @@ export class AplRuntime extends EventEmitter {
 	}
 	
 	private async initialiseBreakpoints() {
-		const promises: Promise<void>[] = [];
-		this._breakPoints.forEach((bps, filePath) => {
-			promises.push(this.setBreakPointOnFile(bps, filePath));
-		});
-		await Promise.all(promises);
+		// Set breakpoints sequentially — exec can only track one echo at a time
+		for (const [filePath, bps] of this._breakPoints) {
+			await this.setBreakPointOnFile(bps, filePath);
+		}
 	}
 
 	/**
@@ -448,6 +466,12 @@ export class AplRuntime extends EventEmitter {
 		if (!win) return;
 		const filename = Path.resolve(win.filename);
 		delete this._windows[x.win];
+
+		// Clean up temp files created for no-Link tracing
+		if (filename.startsWith(AplRuntime._tmpDir)) {
+			try { fs.unlinkSync(filename); } catch {}
+		}
+
 		this.sendEvent('closeWindow', { filename });
 
 		// Auto-terminate: if this was an auto-debug session and all tracer windows are closed,
@@ -461,7 +485,20 @@ export class AplRuntime extends EventEmitter {
 	private _hasOpenWindows(): boolean {
 		return Object.keys(this._windows).length > 0;
 	}
+	private static readonly _tmpDir = Path.join(os.tmpdir(), 'vscode-apl');
+
 	private openWindow(x: OpenWindowMessage) {
+		// When no file is associated (no Link), create a temp file from
+		// the function source so VS Code can display it in the editor.
+		if (!x.filename && x.text?.length) {
+			if (!fs.existsSync(AplRuntime._tmpDir)) {
+				fs.mkdirSync(AplRuntime._tmpDir, { recursive: true });
+			}
+			const safeName = x.name.replace(/[⎕#./\\:*?"<>|]/g, '_');
+			const tmpFile = Path.join(AplRuntime._tmpDir, `${safeName}_${x.token}.aplf`);
+			fs.writeFileSync(tmpFile, x.text.join('\n'), 'utf8');
+			x.filename = tmpFile;
+		}
 		this._windows[x.token] = x;
 		this._winId = x.token;
 		const filename = Path.resolve(x.filename);
@@ -490,11 +527,26 @@ export class AplRuntime extends EventEmitter {
 		// ${x.stops} stops
 		// ${x.monitors} monitors`, 'Clear all trace/stop/monitor');
 	}
+	/** Look up the temp file for a function name from open debug windows.
+	 *  Stack descriptions use fully-qualified names (#.goo) while
+	 *  OpenWindow.name is the local name (goo), so also match the
+	 *  last component after the final dot.
+	 */
+	private _windowFile(name: string): string | undefined {
+		const localName = name.includes('.') ? name.split('.').pop()! : name;
+		for (const win of Object.values(this._windows)) {
+			if (win.name === name || win.name === localName) {
+				return Path.resolve(win.filename);
+			}
+		}
+		return undefined;
+	}
+
 	private replyGetSIStack(x: ReplyGetSIStackMessage) {
 		this.log('getSIStack');
 		const frames: IStackFrame[] = x.stack.map((s, i) => {
 			const { name, lineOffset } = parseStackDescription(s.description);
-			const file = this._linkMap[name];
+			const file = this._linkMap[name] || this._windowFile(name) || '';
 			return {
 				index: i,
 				name,
