@@ -47,12 +47,7 @@ export class EditWindowManager implements vscode.Disposable {
 		});
 
 		this._session.on('gotoEditWindow', (args: GotoWindowMessage) => {
-			const entry = this._editWindows.get(args.win);
-			if (entry) {
-				vscode.workspace.openTextDocument(entry.uri).then(doc => {
-					vscode.window.showTextDocument(doc, { preview: false });
-				});
-			}
+			this._handleGotoEditWindow(args.win);
 		});
 
 		this._session.on('updateEditWindow', (args: OpenWindowMessage) => {
@@ -122,40 +117,66 @@ export class EditWindowManager implements vscode.Disposable {
 		this._editWindows.set(token, { uri, tempFile, name, entityType });
 		this._editWindowsByUri.set(uri.toString(), token);
 
-		// For variables, replace the display form with array notation before
-		// opening the editor so there is no file-change race.
+		// For variables, replace display form with array notation before opening
 		if (VARIABLE_ENTITY_TYPES.has(entityType) && tempFile) {
-			const aplPath = uri.fsPath.replace(/\\/g, '/');
-			await new Promise<void>((resolve) => {
-				const watcher = fs.watch(uri.fsPath, { persistent: false }, () => {
-					watcher.close();
-					resolve();
-				});
-				this._session.execute(`(⊂↑⎕SE.Dyalog.Array.Serialise ${name})⎕NPUT'${aplPath}'1`);
-			});
+			await this._serialiseToFile(name, uri.fsPath);
 		}
 
 		const doc = await vscode.workspace.openTextDocument(uri);
 		await vscode.window.showTextDocument(doc, { preview: false });
 	}
 
-	// --- Update (interpreter pushed new content for an open window) ---
+	// --- Goto (interpreter wants to bring a window to front) ---
 
-	private _handleUpdateEditWindow(args: OpenWindowMessage): void {
-		const entry = this._editWindows.get(args.token);
+	private async _handleGotoEditWindow(win: number): Promise<void> {
+		const entry = this._editWindows.get(win);
 		if (!entry) { return; }
 
-		const content = (args.text || []).join('\n');
+		// Re-serialise variables to array notation (may have changed)
+		if (VARIABLE_ENTITY_TYPES.has(entry.entityType) && entry.tempFile) {
+			await this._serialiseToFile(entry.name, entry.uri.fsPath);
+		}
+
+		const doc = await vscode.workspace.openTextDocument(entry.uri);
+		await vscode.window.showTextDocument(doc, { preview: false });
+		await vscode.commands.executeCommand('workbench.action.files.revert');
+	}
+
+	// --- Update (interpreter pushed new content for an open window) ---
+
+	private async _handleUpdateEditWindow(args: OpenWindowMessage): Promise<void> {
+		const entry = this._editWindows.get(args.token);
+		if (!entry) { return; }
 
 		if (entry.tempFile) {
 			const doc = vscode.workspace.textDocuments.find(
 				d => d.uri.toString() === entry.uri.toString()
 			);
-			// Only write if the document is clean — don't overwrite user edits
-			if (doc && !doc.isDirty && doc.getText() !== content) {
-				fs.writeFileSync(entry.uri.fsPath, content, 'utf-8');
+			if (doc?.isDirty) { return; }
+
+			if (VARIABLE_ENTITY_TYPES.has(entry.entityType)) {
+				// Re-serialise to array notation instead of using display form
+				await this._serialiseToFile(entry.name, entry.uri.fsPath);
+			} else {
+				const content = (args.text || []).join('\n');
+				if (doc && doc.getText() !== content) {
+					fs.writeFileSync(entry.uri.fsPath, content, 'utf-8');
+				}
 			}
 		}
+	}
+
+	// --- Serialise helper ---
+
+	private _serialiseToFile(name: string, fsPath: string): Promise<void> {
+		const aplPath = fsPath.replace(/\\/g, '/');
+		return new Promise<void>((resolve) => {
+			const watcher = fs.watch(fsPath, { persistent: false }, () => {
+				watcher.close();
+				resolve();
+			});
+			this._session.execute(`(⊂↑⎕SE.Dyalog.Array.Serialise ${name})⎕NPUT'${aplPath}'1`);
+		});
 	}
 
 	// --- Save / close ---
@@ -173,9 +194,6 @@ export class EditWindowManager implements vscode.Disposable {
 		}
 
 		if (VARIABLE_ENTITY_TYPES.has(entry.entityType)) {
-			// Variables: SaveChanges silently no-ops, so assign via Execute.
-			// The editor shows array notation (from ⎕SE.Dyalog.Array.Serialise),
-			// which needs real newlines to preserve structure.
 			const value = lines.join('\n');
 			this._session.execute(`${entry.name} ← ${value}`);
 			return;
