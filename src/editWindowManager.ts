@@ -122,21 +122,21 @@ export class EditWindowManager implements vscode.Disposable {
 		this._editWindows.set(token, { uri, tempFile, name, entityType });
 		this._editWindowsByUri.set(uri.toString(), token);
 
-		const doc = await vscode.workspace.openTextDocument(uri);
-		await vscode.window.showTextDocument(doc, { preview: false });
-
-		// For variables, replace the display form with array notation so the
-		// content is round-trippable on save.
+		// For variables, replace the display form with array notation before
+		// opening the editor so there is no file-change race.
 		if (VARIABLE_ENTITY_TYPES.has(entityType) && tempFile) {
 			const aplPath = uri.fsPath.replace(/\\/g, '/');
-			// Watch for the interpreter to overwrite the temp file, then
-			// revert the VS Code document so it picks up the new content cleanly.
-			const watcher = fs.watch(uri.fsPath, { persistent: false }, () => {
-				watcher.close();
-				vscode.commands.executeCommand('workbench.action.files.revert');
+			await new Promise<void>((resolve) => {
+				const watcher = fs.watch(uri.fsPath, { persistent: false }, () => {
+					watcher.close();
+					resolve();
+				});
+				this._session.execute(`(⊂↑⎕SE.Dyalog.Array.Serialise ${name})⎕NPUT'${aplPath}'1`);
 			});
-			this._session.execute(`(⊂↑⎕SE.Dyalog.Array.Serialise ${name})⎕NPUT'${aplPath}'1`);
 		}
+
+		const doc = await vscode.workspace.openTextDocument(uri);
+		await vscode.window.showTextDocument(doc, { preview: false });
 	}
 
 	// --- Update (interpreter pushed new content for an open window) ---
