@@ -109,7 +109,7 @@ export class EditWindowManager implements vscode.Disposable {
 			fs.mkdirSync(tmpDir, { recursive: true });
 
 			const safeName = name.replace(/[⎕#./\\:*?"<>|]/g, '_');
-			const filepath = Path.join(tmpDir, `${safeName}.apl`);
+			const filepath = Path.join(tmpDir, `${safeName}_${token}.apl`);
 			fs.writeFileSync(filepath, content, 'utf-8');
 
 			uri = vscode.Uri.file(filepath);
@@ -181,7 +181,7 @@ export class EditWindowManager implements vscode.Disposable {
 	}
 
 	private _serialiseToFile(name: string, fsPath: string): Promise<void> {
-		const aplPath = fsPath.replace(/\\/g, '/');
+		const aplPath = fsPath.replace(/\\/g, '/').replace(/'/g, "''");
 		return new Promise<void>((resolve) => {
 			const watcher = fs.watch(fsPath, { persistent: false }, () => {
 				watcher.close();
