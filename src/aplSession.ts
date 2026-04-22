@@ -32,6 +32,7 @@ export class AplSession extends EventEmitter {
 	// Pending debug messages buffered when no debug handler is attached
 	private _pendingDebugMessages: Array<[string, any]> = [];
 	private _isSuspended = false;
+	private _editWindowTokens = new Set<number>();
 
 	public constructor() {
 		super();
@@ -269,6 +270,7 @@ export class AplSession extends EventEmitter {
 		}
 		this._pendingDebugMessages = [];
 		this._isSuspended = false;
+		this._editWindowTokens.clear();
 		this.setState('disconnected');
 	}
 
@@ -454,10 +456,33 @@ export class AplSession extends EventEmitter {
 				break;
 
 			case 'OpenWindow':
+				if (!this._debugHandler) {
+					if (args.debugger) {
+						this._pendingDebugMessages.push([command, args]);
+					} else {
+						this._editWindowTokens.add(args.token);
+						this.emit('editWindow', args);
+					}
+				}
+				break;
+
 			case 'UpdateWindow':
+				if (!this._debugHandler) {
+					if (this._editWindowTokens.has(args.token)) {
+						this.emit('updateEditWindow', args);
+					} else {
+						this._pendingDebugMessages.push([command, args]);
+					}
+				}
+				break;
+
 			case 'GotoWindow':
 				if (!this._debugHandler) {
-					this._pendingDebugMessages.push([command, args]);
+					if (this._editWindowTokens.has(args.win)) {
+						this.emit('gotoEditWindow', args);
+					} else {
+						this._pendingDebugMessages.push([command, args]);
+					}
 				}
 				break;
 
@@ -471,10 +496,21 @@ export class AplSession extends EventEmitter {
 
 			case 'CloseWindow':
 				if (!this._debugHandler) {
-					if (this._pendingDebugMessages.length > 0) {
-						this._pendingDebugMessages.push([command, args]);
+					if (this._editWindowTokens.has(args.win)) {
+						this._editWindowTokens.delete(args.win);
+						this.emit('closeEditWindow', args);
+					} else {
+						if (this._pendingDebugMessages.length > 0) {
+							this._pendingDebugMessages.push([command, args]);
+						}
+						this._isSuspended = false;
 					}
-					this._isSuspended = false;
+				}
+				break;
+
+			case 'ReplySaveChanges':
+				if (this._editWindowTokens.has(args.win)) {
+					this.emit('replySaveChanges', args);
 				}
 				break;
 

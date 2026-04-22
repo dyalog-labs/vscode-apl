@@ -192,6 +192,11 @@ export class ReplManager implements vscode.Disposable {
 		this.activeTab?.interrupt();
 	}
 
+	/** Open a definition in the active tab's edit window manager. */
+	public editDefinition(name: string): void {
+		this.activeTab?.editWindowManager.editDefinition(name);
+	}
+
 	public dispose(): void {
 		for (const tab of this._tabs.values()) {
 			tab.dispose();

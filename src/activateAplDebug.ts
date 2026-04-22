@@ -13,7 +13,6 @@ import { DyalogConnection, findConnectionsFile } from './findDyalog';
 import { ReplManager } from './replManager';
 import { ReplViewProvider } from './replPanel';
 import { AplBacktickHandler } from './aplBacktick';
-import { openAplDefinition } from './utils';
 import { handleHelp } from './aplHelp';
 
 let aplStatusBarItem: vscode.StatusBarItem;
@@ -112,7 +111,7 @@ export function activateAplDebug(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('apl.repl.interrupt', () => {
 			replManager.interruptActiveTab();
 		}),
-		vscode.commands.registerTextEditorCommand('apl.goToDefinition', async (editor) => {
+		vscode.commands.registerTextEditorCommand('apl.goToDefinition', (editor) => {
 			const position = editor.selection.active;
 			let wordRange = editor.document.getWordRangeAtPosition(position);
 			// When cursor is right after a word, step back one character
@@ -122,7 +121,7 @@ export function activateAplDebug(context: vscode.ExtensionContext) {
 			if (!wordRange) { return; }
 			const word = editor.document.getText(wordRange);
 			if (word) {
-				await openAplDefinition(word);
+				replManager.editDefinition(word);
 			}
 		}),
 		vscode.commands.registerTextEditorCommand('apl.localizeVariable', (editor) => {

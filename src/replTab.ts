@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { AplSession, ConnectionState } from './aplSession';
+import { EditWindowManager } from './editWindowManager';
 import { ReplManager } from './replManager';
 import { ReplBreakpointSync } from './replBreakpointSync';
 import { updateStatusBar } from './activateAplDebug';
@@ -22,6 +23,7 @@ export class ReplTab implements vscode.Disposable {
 	private _debugSession?: vscode.DebugSession;
 	private _isDebugMode = false;
 	private _breakpointSync = new ReplBreakpointSync();
+	private _editWindowManager: EditWindowManager;
 	private _lastStatusText = '';
 
 	/** Set by the view provider when this tab is active; undefined when background. */
@@ -38,6 +40,7 @@ export class ReplTab implements vscode.Disposable {
 		this._session = session;
 		this._manager = manager;
 
+		this._editWindowManager = new EditWindowManager(session, (type, text) => this._appendOutput(type, text));
 		this._setupSessionListeners();
 		this._setupDebugListeners();
 	}
@@ -56,6 +59,10 @@ export class ReplTab implements vscode.Disposable {
 
 	public get connectionState(): ConnectionState {
 		return this._session.state;
+	}
+
+	public get editWindowManager(): EditWindowManager {
+		return this._editWindowManager;
 	}
 
 
@@ -336,8 +343,8 @@ export class ReplTab implements vscode.Disposable {
 		}
 	}
 
-	public async handleGoToDefinition(name: string): Promise<void> {
-		await openAplDefinition(name);
+	public handleGoToDefinition(name: string): void {
+		this._editWindowManager.editDefinition(name);
 	}
 
 	public clear(): void {
@@ -600,6 +607,7 @@ export class ReplTab implements vscode.Disposable {
 	}
 
 	public dispose(): void {
+		this._editWindowManager.dispose();
 		this._breakpointSync.dispose();
 		this._session.disconnect();
 		this._disposables.forEach(d => d.dispose());
