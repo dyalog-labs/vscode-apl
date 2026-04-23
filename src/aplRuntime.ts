@@ -439,7 +439,6 @@ export class AplRuntime extends EventEmitter {
 		// D.ipc && D.ipc.server.broadcast('syntax', D.syntax);
 	}
 	private valueTip(x: ValueTipMessage) {
-		this.log('getValueTip');
 		this._valueTip.resolve(x.token, x);
 	}
 	private setHighlightLine(x: SetHighlightLineMessage) {
@@ -547,7 +546,6 @@ export class AplRuntime extends EventEmitter {
 	}
 
 	private replyGetSIStack(x: ReplyGetSIStackMessage) {
-		this.log('getSIStack');
 		const frames: IStackFrame[] = x.stack.map((s, i) => {
 			const { name, lineOffset } = parseStackDescription(s.description);
 			const file = this._linkMap[name] || this._windowFile(name) || '';

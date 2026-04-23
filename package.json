@@ -178,6 +178,13 @@
           "order": 3
         }
       ],
+      "editor/title": [
+        {
+          "command": "apl.editVariable",
+          "when": "resourceScheme == apl-view",
+          "group": "navigation"
+        }
+      ],
       "editor/title/run": [
         {
           "command": "extension.apl-debug.runEditorContents",
@@ -282,6 +289,12 @@
         "command": "apl.localizeVariable",
         "title": "Localize Variable",
         "category": "APL"
+      },
+      {
+        "command": "apl.editVariable",
+        "title": "Edit as Array Notation",
+        "category": "APL",
+        "icon": "$(edit)"
       }
     ],
     "configuration": {

@@ -2,7 +2,13 @@
   "permissions": {
     "allow": [
       "Bash(npm run build:*)",
-      "Bash(npm run compile:*)"
+      "Bash(npm run compile:*)",
+      "Bash(gh issue:*)",
+      "Bash(git fetch:*)",
+      "Bash(grep -n \"\\\\\"Edit\\\\\"\" /Users/nk/dev/gritt/*.go /Users/nk/dev/gritt/session/*.go)",
+      "Bash(grep:*)",
+      "Bash(ls:*)",
+      "Bash(gritt:*)"
     ]
   }
 }

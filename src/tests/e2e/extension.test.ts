@@ -28,6 +28,7 @@ suite('Extension Host — activation', () => {
 			'apl.repl.interrupt',
 			'apl.goToDefinition',
 			'apl.localizeVariable',
+			'apl.editVariable',
 			'apl.escapeAction',
 			'apl.smartStepOver',
 			'extension.apl-debug.runEditorContents',

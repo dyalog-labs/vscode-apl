@@ -6,16 +6,54 @@ import { AplSession } from './aplSession';
 import type { CloseWindowMessage, GotoWindowMessage, OpenWindowMessage, ReplySaveChangesMessage } from './rideMessages';
 
 interface EditWindowEntry {
-	uri: vscode.Uri;
-	tempFile: boolean;
+	token: number;
 	name: string;
 	entityType: number;
+	readOnly: boolean;
+	/** Set when in read-only view mode (apl-view: scheme virtual doc) */
+	viewUri?: vscode.Uri;
+	/** Set when in editable mode (temp file on disk) */
+	tempFile?: string;
+	/** Set while a SaveChanges round-trip is in flight */
+	pendingSave?: {
+		resolve: () => void;
+		reject: (err: Error) => void;
+	};
 }
 
-// entityType values for variables (from RIDE source):
-// 2: SimpleCharArray, 4: SimpleNumericArray, 8: MixedSimpleArray,
-// 16: NestedArray, 128: SimpleCharVector
-const VARIABLE_ENTITY_TYPES = new Set([2, 4, 8, 16, 128]);
+/**
+ * Provides read-only, live-updating virtual documents for variable views.
+ * Content is refreshed by the interpreter via UpdateWindow messages.
+ */
+class AplViewProvider implements vscode.TextDocumentContentProvider {
+	private _onDidChange = new vscode.EventEmitter<vscode.Uri>();
+	readonly onDidChange = this._onDidChange.event;
+
+	private _contents = new Map<number, string>();
+
+	provideTextDocumentContent(uri: vscode.Uri): string {
+		const token = parseInt(uri.authority, 10);
+		return this._contents.get(token) ?? '';
+	}
+
+	setContent(token: number, text: string): void {
+		this._contents.set(token, text);
+		this._onDidChange.fire(AplViewProvider.uriForToken(token));
+	}
+
+	deleteContent(token: number): void {
+		this._contents.delete(token);
+	}
+
+	dispose(): void {
+		this._onDidChange.dispose();
+	}
+
+	static uriForToken(token: number, name?: string): vscode.Uri {
+		const safeName = (name ?? 'view').replace(/[⎕#./\\:*?"<>|]/g, '_');
+		return vscode.Uri.parse(`apl-view://${token}/${safeName}.apl`);
+	}
+}
 
 /** Shared temp directory for all vscode-apl temp files (edit windows and debug tracers). */
 export const TEMP_DIR = Path.join(os.tmpdir(), 'vscode-apl');
@@ -32,21 +70,25 @@ export function cleanTempDir(): void {
 
 /**
  * Manages non-debug edit windows — those opened via )ED, Shift+Enter
- * (go-to-definition), or any other RIDE `Edit` request.  Tracks RIDE
- * tokens, maps them to VS Code editors (backed by temp files or workspace
- * files), and keeps editor content in sync with the interpreter state.
+ * (go-to-definition), or any other RIDE `Edit` request.
+ *
+ * Variables open read-only in display form (via TextDocumentContentProvider)
+ * and transition to editable array notation after ShowAsArrayNotation.
+ * Functions open directly as editable temp files. All saves go through
+ * the RIDE SaveChanges protocol, and CloseWindow is deferred until any
+ * pending save completes.
  */
 export class EditWindowManager implements vscode.Disposable {
 
 	private _session: AplSession;
 	private _onOutput: (type: string, text: string) => void;
 
-	/** RIDE token → editor file info */
+	/** RIDE token → editor entry */
 	private _editWindows = new Map<number, EditWindowEntry>();
 	/** Reverse lookup: URI string → RIDE token */
 	private _editWindowsByUri = new Map<string, number>();
-	/** Debounced serialisation timers, keyed by token */
-	private _serialiseTimers = new Map<number, ReturnType<typeof setTimeout>>();
+	/** Read-only virtual document provider */
+	private _viewProvider: AplViewProvider;
 
 	private _disposables: vscode.Disposable[] = [];
 	/** Session listener references for removal in dispose() */
@@ -55,6 +97,10 @@ export class EditWindowManager implements vscode.Disposable {
 	constructor(session: AplSession, onOutput: (type: string, text: string) => void) {
 		this._session = session;
 		this._onOutput = onOutput;
+		this._viewProvider = new AplViewProvider();
+		this._disposables.push(
+			vscode.workspace.registerTextDocumentContentProvider('apl-view', this._viewProvider)
+		);
 		this._setupListeners();
 	}
 
@@ -81,9 +127,7 @@ export class EditWindowManager implements vscode.Disposable {
 		});
 
 		this._onSession('replySaveChanges', (args: ReplySaveChangesMessage) => {
-			if (args.err) {
-				this._onOutput('error', `Save failed for window ${args.win}: error ${args.err}`);
-			}
+			this._handleReplySaveChanges(args);
 		});
 
 		this._disposables.push(
@@ -111,6 +155,17 @@ export class EditWindowManager implements vscode.Disposable {
 	 */
 	public editDefinition(name: string): void {
 		this._session.sendMessage('Edit', { win: 0, pos: 0, text: name });
+	}
+
+	/**
+	 * Request the interpreter to switch a read-only variable view into
+	 * editable array notation.  The interpreter responds with UpdateWindow
+	 * (entityType 262144, readOnly 0), handled by _handleUpdateEditWindow.
+	 */
+	public requestEditMode(token: number): void {
+		const entry = this._editWindows.get(token);
+		if (!entry || !entry.readOnly) { return; }
+		this._session.sendMessage('ShowAsArrayNotation', { win: token });
 	}
 
 	/**
@@ -152,32 +207,38 @@ export class EditWindowManager implements vscode.Disposable {
 	// --- Open ---
 
 	private async _handleEditWindow(args: OpenWindowMessage): Promise<void> {
-		const { token, name, text, filename, entityType } = args;
+		const { token, name, text, entityType, readOnly } = args;
 		const content = (text || []).join('\n');
+		const isReadOnly = readOnly === 1;
 
-		let uri: vscode.Uri;
-		let tempFile = false;
+		if (isReadOnly) {
+			// Read-only view: use virtual document provider
+			const viewUri = AplViewProvider.uriForToken(token, name);
+			this._viewProvider.setContent(token, content);
 
-		if (filename && fs.existsSync(filename)) {
-			uri = vscode.Uri.file(filename);
+			const entry: EditWindowEntry = { token, name, entityType, readOnly: true, viewUri };
+			this._editWindows.set(token, entry);
+			this._editWindowsByUri.set(viewUri.toString(), token);
+
+			const doc = await vscode.workspace.openTextDocument(viewUri);
+			await vscode.window.showTextDocument(doc, { preview: false });
 		} else {
-			fs.mkdirSync(TEMP_DIR, { recursive: true });
-
-			const safeName = name.replace(/[⎕#./\\:*?"<>|]/g, '_');
-			const filepath = Path.join(TEMP_DIR, `${safeName}_${token}.apl`);
-			fs.writeFileSync(filepath, content, 'utf-8');
-
-			uri = vscode.Uri.file(filepath);
-			tempFile = true;
+			// Editable: use temp file
+			await this._openAsTempFile(token, name, entityType, content);
 		}
+	}
 
-		this._editWindows.set(token, { uri, tempFile, name, entityType });
+	private async _openAsTempFile(token: number, name: string, entityType: number, content: string): Promise<void> {
+		fs.mkdirSync(TEMP_DIR, { recursive: true });
+
+		const safeName = name.replace(/[⎕#./\\:*?"<>|]/g, '_');
+		const filepath = Path.join(TEMP_DIR, `${safeName}_${token}.apl`);
+		fs.writeFileSync(filepath, content, 'utf-8');
+
+		const uri = vscode.Uri.file(filepath);
+		const entry: EditWindowEntry = { token, name, entityType, readOnly: false, tempFile: filepath };
+		this._editWindows.set(token, entry);
 		this._editWindowsByUri.set(uri.toString(), token);
-
-		// For variables, replace display form with array notation before opening
-		if (VARIABLE_ENTITY_TYPES.has(entityType) && tempFile) {
-			await this._serialiseToFile(name, uri.fsPath);
-		}
 
 		const doc = await vscode.workspace.openTextDocument(uri);
 		await vscode.window.showTextDocument(doc, { preview: false });
@@ -189,14 +250,11 @@ export class EditWindowManager implements vscode.Disposable {
 		const entry = this._editWindows.get(win);
 		if (!entry) { return; }
 
-		// Re-serialise variables to array notation (may have changed)
-		if (VARIABLE_ENTITY_TYPES.has(entry.entityType) && entry.tempFile) {
-			await this._serialiseToFile(entry.name, entry.uri.fsPath);
-		}
+		const uri = entry.viewUri ?? (entry.tempFile ? vscode.Uri.file(entry.tempFile) : undefined);
+		if (!uri) { return; }
 
-		const doc = await vscode.workspace.openTextDocument(entry.uri);
+		const doc = await vscode.workspace.openTextDocument(uri);
 		await vscode.window.showTextDocument(doc, { preview: false });
-		await vscode.commands.executeCommand('workbench.action.files.revert');
 	}
 
 	// --- Update (interpreter pushed new content for an open window) ---
@@ -205,53 +263,56 @@ export class EditWindowManager implements vscode.Disposable {
 		const entry = this._editWindows.get(args.token);
 		if (!entry) { return; }
 
+		const content = (args.text || []).join('\n');
+		const nowEditable = args.readOnly === 0;
+
+		// Transition: read-only view → editable temp file (after ShowAsArrayNotation)
+		if (entry.readOnly && nowEditable) {
+			// Close the virtual document tab
+			if (entry.viewUri) {
+				const uriStr = entry.viewUri.toString();
+				const closePromises: Thenable<unknown>[] = [];
+				for (const group of vscode.window.tabGroups.all) {
+					for (const tab of group.tabs) {
+						if (tab.input instanceof vscode.TabInputText && tab.input.uri.toString() === uriStr) {
+							closePromises.push(vscode.window.tabGroups.close(tab));
+						}
+					}
+				}
+				await Promise.all(closePromises);
+				this._editWindowsByUri.delete(uriStr);
+				this._viewProvider.deleteContent(args.token);
+			}
+
+			// Open as editable temp file
+			entry.viewUri = undefined;
+			entry.readOnly = false;
+			entry.entityType = args.entityType;
+			await this._openAsTempFile(args.token, entry.name, args.entityType, content);
+			return;
+		}
+
+		// Still in read-only view mode: update the virtual document
+		if (entry.readOnly && entry.viewUri) {
+			this._viewProvider.setContent(args.token, content);
+			return;
+		}
+
+		// In edit mode: update temp file if not dirty
 		if (entry.tempFile) {
+			const uri = vscode.Uri.file(entry.tempFile);
 			const doc = vscode.workspace.textDocuments.find(
-				d => d.uri.toString() === entry.uri.toString()
+				d => d.uri.toString() === uri.toString()
 			);
 			if (doc?.isDirty) { return; }
 
-			const content = (args.text || []).join('\n');
 			if (doc && doc.getText() !== content) {
-				fs.writeFileSync(entry.uri.fsPath, content, 'utf-8');
-			}
-
-			// Debounce: once updates stop, re-serialise to array notation
-			if (VARIABLE_ENTITY_TYPES.has(entry.entityType)) {
-				this._debouncedSerialise(args.token, entry.name, entry.uri.fsPath);
+				fs.writeFileSync(entry.tempFile, content, 'utf-8');
 			}
 		}
 	}
 
-	// --- Serialise helpers ---
-
-	private _debouncedSerialise(token: number, name: string, fsPath: string): void {
-		const prev = this._serialiseTimers.get(token);
-		if (prev) { clearTimeout(prev); }
-
-		this._serialiseTimers.set(token, setTimeout(() => {
-			this._serialiseTimers.delete(token);
-			this._serialiseToFile(name, fsPath);
-		}, 500));
-	}
-
-	private _serialiseToFile(name: string, fsPath: string): Promise<void> {
-		const aplPath = fsPath.replace(/\\/g, '/').replace(/'/g, "''");
-		return new Promise<void>((resolve) => {
-			const timeout = setTimeout(() => {
-				watcher.close();
-				resolve();
-			}, 5000);
-			const watcher = fs.watch(fsPath, { persistent: false }, () => {
-				clearTimeout(timeout);
-				watcher.close();
-				resolve();
-			});
-			this._session.execute(`(⊂↑⎕SE.Dyalog.Array.Serialise ${name})⎕NPUT'${aplPath}'1`);
-		});
-	}
-
-	// --- Save / close ---
+	// --- Save ---
 
 	private _handleDocumentSaved(doc: vscode.TextDocument): void {
 		const token = this._editWindowsByUri.get(doc.uri.toString());
@@ -265,11 +326,10 @@ export class EditWindowManager implements vscode.Disposable {
 			lines.pop();
 		}
 
-		if (VARIABLE_ENTITY_TYPES.has(entry.entityType)) {
-			const value = lines.join('\n');
-			this._session.execute(`${entry.name} ← ${value}`);
-			return;
-		}
+		const promise = new Promise<void>((resolve, reject) => {
+			entry.pendingSave = { resolve, reject };
+		});
+		promise.catch(() => {});
 
 		this._session.sendMessage('SaveChanges', {
 			win: token,
@@ -280,20 +340,48 @@ export class EditWindowManager implements vscode.Disposable {
 		});
 	}
 
-	private _handleTabClosed(uri: vscode.Uri): void {
+	private _handleReplySaveChanges(args: ReplySaveChangesMessage): void {
+		const entry = this._editWindows.get(args.win);
+		if (!entry?.pendingSave) { return; }
+
+		if (args.err) {
+			this._onOutput('error', `Save failed for window ${args.win}: error ${args.err}`);
+			entry.pendingSave.reject(new Error(`Save failed: error ${args.err}`));
+		} else {
+			entry.pendingSave.resolve();
+		}
+		entry.pendingSave = undefined;
+	}
+
+	// --- Close ---
+
+	private async _handleTabClosed(uri: vscode.Uri): Promise<void> {
 		const uriStr = uri.toString();
 		const token = this._editWindowsByUri.get(uriStr);
 		if (token === undefined) { return; }
 
-		this._session.sendMessage('CloseWindow', { win: token });
-		const timer = this._serialiseTimers.get(token);
-		if (timer) { clearTimeout(timer); this._serialiseTimers.delete(token); }
-
 		const entry = this._editWindows.get(token);
-		if (entry?.tempFile) {
-			try { fs.unlinkSync(entry.uri.fsPath); } catch { /* ignore */ }
+
+		// Wait for any in-flight save before sending CloseWindow
+		if (entry?.pendingSave) {
+			try {
+				await new Promise<void>((resolve, reject) => {
+					const pending = entry.pendingSave!;
+					const origResolve = pending.resolve;
+					const origReject = pending.reject;
+					pending.resolve = () => { origResolve(); resolve(); };
+					pending.reject = (err) => { origReject(err); reject(err); };
+				});
+			} catch {
+				// Save failed, still close the window
+			}
 		}
 
+		this._session.sendMessage('CloseWindow', { win: token });
+
+		if (entry?.tempFile) {
+			try { fs.unlinkSync(entry.tempFile); } catch { /* ignore */ }
+		}
 		this._editWindows.delete(token);
 		this._editWindowsByUri.delete(uriStr);
 	}
@@ -302,27 +390,36 @@ export class EditWindowManager implements vscode.Disposable {
 		const entry = this._editWindows.get(win);
 		if (!entry) { return; }
 
-		const timer = this._serialiseTimers.get(win);
-		if (timer) { clearTimeout(timer); this._serialiseTimers.delete(win); }
-
-		const uriStr = entry.uri.toString();
-
-		const closePromises: Thenable<unknown>[] = [];
-		for (const group of vscode.window.tabGroups.all) {
-			for (const tab of group.tabs) {
-				if (tab.input instanceof vscode.TabInputText && tab.input.uri.toString() === uriStr) {
-					closePromises.push(vscode.window.tabGroups.close(tab));
+		if (entry.viewUri) {
+			const uriStr = entry.viewUri.toString();
+			const closePromises: Thenable<unknown>[] = [];
+			for (const group of vscode.window.tabGroups.all) {
+				for (const tab of group.tabs) {
+					if (tab.input instanceof vscode.TabInputText && tab.input.uri.toString() === uriStr) {
+						closePromises.push(vscode.window.tabGroups.close(tab));
+					}
 				}
 			}
-		}
-		await Promise.all(closePromises);
-
-		if (entry.tempFile) {
-			try { fs.unlinkSync(entry.uri.fsPath); } catch { /* ignore */ }
+			await Promise.all(closePromises);
+			this._viewProvider.deleteContent(win);
+			this._editWindowsByUri.delete(uriStr);
+		} else if (entry.tempFile) {
+			const uri = vscode.Uri.file(entry.tempFile);
+			const uriStr = uri.toString();
+			const closePromises: Thenable<unknown>[] = [];
+			for (const group of vscode.window.tabGroups.all) {
+				for (const tab of group.tabs) {
+					if (tab.input instanceof vscode.TabInputText && tab.input.uri.toString() === uriStr) {
+						closePromises.push(vscode.window.tabGroups.close(tab));
+					}
+				}
+			}
+			await Promise.all(closePromises);
+			try { fs.unlinkSync(entry.tempFile); } catch { /* ignore */ }
+			this._editWindowsByUri.delete(uriStr);
 		}
 
 		this._editWindows.delete(win);
-		this._editWindowsByUri.delete(uriStr);
 	}
 
 	// --- Lifecycle ---
@@ -330,7 +427,10 @@ export class EditWindowManager implements vscode.Disposable {
 	public dispose(): void {
 		for (const [token, entry] of this._editWindows) {
 			if (entry.tempFile) {
-				try { fs.unlinkSync(entry.uri.fsPath); } catch { /* ignore */ }
+				try { fs.unlinkSync(entry.tempFile); } catch { /* ignore */ }
+			}
+			if (entry.viewUri) {
+				this._viewProvider.deleteContent(token);
 			}
 			if (this._session.isConnected) {
 				this._session.sendMessage('CloseWindow', { win: token });
@@ -338,8 +438,7 @@ export class EditWindowManager implements vscode.Disposable {
 		}
 		this._editWindows.clear();
 		this._editWindowsByUri.clear();
-		for (const t of this._serialiseTimers.values()) { clearTimeout(t); }
-		this._serialiseTimers.clear();
+		this._viewProvider.dispose();
 
 		for (const { event, fn } of this._sessionListeners) {
 			this._session.removeListener(event, fn);

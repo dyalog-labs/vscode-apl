@@ -113,6 +113,13 @@ export function activateAplDebug(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('apl.repl.interrupt', () => {
 			replManager.interruptActiveTab();
 		}),
+		vscode.commands.registerCommand('apl.editVariable', () => {
+			const uri = vscode.window.activeTextEditor?.document.uri;
+			if (uri?.scheme === 'apl-view') {
+				const token = parseInt(uri.authority, 10);
+				replManager.activeTab?.editWindowManager.requestEditMode(token);
+			}
+		}),
 		vscode.commands.registerTextEditorCommand('apl.goToDefinition', (editor) => {
 			const position = editor.selection.active;
 			let wordRange = editor.document.getWordRangeAtPosition(position);
