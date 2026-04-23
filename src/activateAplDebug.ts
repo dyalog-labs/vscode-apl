@@ -335,6 +335,11 @@ export function activateAplDebug(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.debug.onDidReceiveDebugSessionCustomEvent((customEvent) => {
 		if (customEvent.event === 'statusInformation') {
 			aplStatusBarItem.text = customEvent.body.text;
+		} else if (customEvent.event === 'closeTempTab') {
+			const replId = (customEvent.session.configuration as any).replId;
+			if (replId) {
+				replManager.closeTempTab(replId, customEvent.body.filename);
+			}
 		}
 	}));
 

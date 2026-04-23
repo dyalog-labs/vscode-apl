@@ -113,6 +113,42 @@ export class EditWindowManager implements vscode.Disposable {
 		this._session.sendMessage('Edit', { win: 0, pos: 0, text: name });
 	}
 
+	/**
+	 * Close the VS Code tab for a temp file and delete it.
+	 * Called when a debug tracer window closes so the orphaned tab doesn't linger.
+	 * If the document has unsaved edits, ⎕FIX them into the interpreter first
+	 * so the user's changes are not lost.
+	 */
+	public async closeTempTab(filename: string): Promise<void> {
+		const uri = vscode.Uri.file(filename);
+		const uriStr = uri.toString();
+
+		// If the user has unsaved edits, ⎕FIX them before closing.
+		const doc = vscode.workspace.textDocuments.find(
+			d => d.uri.toString() === uriStr
+		);
+		if (doc?.isDirty) {
+			const lines = doc.getText().split(/\r?\n/);
+			if (lines.length > 0 && lines[lines.length - 1] === '') {
+				lines.pop();
+			}
+			const quoted = lines.map(l => `'${l.replace(/'/g, "''")}'`).join(' ');
+			this._session.execute(`2 ⎕FIX ${quoted}`);
+		}
+
+		const closePromises: Thenable<unknown>[] = [];
+		for (const group of vscode.window.tabGroups.all) {
+			for (const tab of group.tabs) {
+				if (tab.input instanceof vscode.TabInputText && tab.input.uri.toString() === uriStr) {
+					closePromises.push(vscode.window.tabGroups.close(tab));
+				}
+			}
+		}
+		await Promise.all(closePromises);
+
+		try { fs.unlinkSync(uri.fsPath); } catch { /* ignore */ }
+	}
+
 	// --- Open ---
 
 	private async _handleEditWindow(args: OpenWindowMessage): Promise<void> {

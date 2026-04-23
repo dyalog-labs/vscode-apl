@@ -469,9 +469,11 @@ export class AplRuntime extends EventEmitter {
 		const filename = Path.resolve(win.filename);
 		delete this._windows[x.win];
 
-		// Clean up temp files created for no-Link tracing
+		// Hand temp files to EditWindowManager so the user can keep editing
+		// after the debug session ends.  The manager will ⎕FIX on save and
+		// delete the file when the tab is closed.
 		if (filename.startsWith(TEMP_DIR)) {
-			try { fs.unlinkSync(filename); } catch {}
+			this.sendEvent('closeTempTab', { filename });
 		}
 
 		this.sendEvent('closeWindow', { filename });
