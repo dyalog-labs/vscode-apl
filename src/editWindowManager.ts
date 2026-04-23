@@ -17,6 +17,19 @@ interface EditWindowEntry {
 // 16: NestedArray, 128: SimpleCharVector
 const VARIABLE_ENTITY_TYPES = new Set([2, 4, 8, 16, 128]);
 
+/** Shared temp directory for all vscode-apl temp files (edit windows and debug tracers). */
+export const TEMP_DIR = Path.join(os.tmpdir(), 'vscode-apl');
+
+/** Remove leftover temp files from a previous session (e.g. after a crash). */
+export function cleanTempDir(): void {
+	if (!fs.existsSync(TEMP_DIR)) { return; }
+	try {
+		for (const file of fs.readdirSync(TEMP_DIR)) {
+			try { fs.unlinkSync(Path.join(TEMP_DIR, file)); } catch { /* ignore */ }
+		}
+	} catch { /* ignore */ }
+}
+
 /**
  * Manages non-debug edit windows — those opened via )ED, Shift+Enter
  * (go-to-definition), or any other RIDE `Edit` request.  Tracks RIDE
@@ -36,6 +49,8 @@ export class EditWindowManager implements vscode.Disposable {
 	private _serialiseTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
 	private _disposables: vscode.Disposable[] = [];
+	/** Session listener references for removal in dispose() */
+	private _sessionListeners: Array<{ event: string; fn: (...args: any[]) => void }> = [];
 
 	constructor(session: AplSession, onOutput: (type: string, text: string) => void) {
 		this._session = session;
@@ -43,24 +58,29 @@ export class EditWindowManager implements vscode.Disposable {
 		this._setupListeners();
 	}
 
+	private _onSession(event: string, fn: (...args: any[]) => void): void {
+		this._session.on(event, fn);
+		this._sessionListeners.push({ event, fn });
+	}
+
 	private _setupListeners(): void {
-		this._session.on('editWindow', (args: OpenWindowMessage) => {
+		this._onSession('editWindow', (args: OpenWindowMessage) => {
 			this._handleEditWindow(args);
 		});
 
-		this._session.on('gotoEditWindow', (args: GotoWindowMessage) => {
+		this._onSession('gotoEditWindow', (args: GotoWindowMessage) => {
 			this._handleGotoEditWindow(args.win);
 		});
 
-		this._session.on('updateEditWindow', (args: OpenWindowMessage) => {
+		this._onSession('updateEditWindow', (args: OpenWindowMessage) => {
 			this._handleUpdateEditWindow(args);
 		});
 
-		this._session.on('closeEditWindow', (args: CloseWindowMessage) => {
+		this._onSession('closeEditWindow', (args: CloseWindowMessage) => {
 			this._handleCloseEditWindow(args.win);
 		});
 
-		this._session.on('replySaveChanges', (args: ReplySaveChangesMessage) => {
+		this._onSession('replySaveChanges', (args: ReplySaveChangesMessage) => {
 			if (args.err) {
 				this._onOutput('error', `Save failed for window ${args.win}: error ${args.err}`);
 			}
@@ -105,11 +125,10 @@ export class EditWindowManager implements vscode.Disposable {
 		if (filename && fs.existsSync(filename)) {
 			uri = vscode.Uri.file(filename);
 		} else {
-			const tmpDir = Path.join(os.tmpdir(), 'vscode-apl-ed');
-			fs.mkdirSync(tmpDir, { recursive: true });
+			fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 			const safeName = name.replace(/[⎕#./\\:*?"<>|]/g, '_');
-			const filepath = Path.join(tmpDir, `${safeName}_${token}.apl`);
+			const filepath = Path.join(TEMP_DIR, `${safeName}_${token}.apl`);
 			fs.writeFileSync(filepath, content, 'utf-8');
 
 			uri = vscode.Uri.file(filepath);
@@ -183,7 +202,12 @@ export class EditWindowManager implements vscode.Disposable {
 	private _serialiseToFile(name: string, fsPath: string): Promise<void> {
 		const aplPath = fsPath.replace(/\\/g, '/').replace(/'/g, "''");
 		return new Promise<void>((resolve) => {
+			const timeout = setTimeout(() => {
+				watcher.close();
+				resolve();
+			}, 5000);
 			const watcher = fs.watch(fsPath, { persistent: false }, () => {
+				clearTimeout(timeout);
 				watcher.close();
 				resolve();
 			});
@@ -238,7 +262,7 @@ export class EditWindowManager implements vscode.Disposable {
 		this._editWindowsByUri.delete(uriStr);
 	}
 
-	private _handleCloseEditWindow(win: number): void {
+	private async _handleCloseEditWindow(win: number): Promise<void> {
 		const entry = this._editWindows.get(win);
 		if (!entry) { return; }
 
@@ -247,14 +271,15 @@ export class EditWindowManager implements vscode.Disposable {
 
 		const uriStr = entry.uri.toString();
 
+		const closePromises: Thenable<unknown>[] = [];
 		for (const group of vscode.window.tabGroups.all) {
 			for (const tab of group.tabs) {
 				if (tab.input instanceof vscode.TabInputText && tab.input.uri.toString() === uriStr) {
-					vscode.window.tabGroups.close(tab);
-					break;
+					closePromises.push(vscode.window.tabGroups.close(tab));
 				}
 			}
 		}
+		await Promise.all(closePromises);
 
 		if (entry.tempFile) {
 			try { fs.unlinkSync(entry.uri.fsPath); } catch { /* ignore */ }
@@ -279,6 +304,11 @@ export class EditWindowManager implements vscode.Disposable {
 		this._editWindowsByUri.clear();
 		for (const t of this._serialiseTimers.values()) { clearTimeout(t); }
 		this._serialiseTimers.clear();
+
+		for (const { event, fn } of this._sessionListeners) {
+			this._session.removeListener(event, fn);
+		}
+		this._sessionListeners = [];
 
 		this._disposables.forEach(d => d.dispose());
 		this._disposables = [];

@@ -4,9 +4,9 @@
 
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as Path from 'path';
 import { AplSession } from './aplSession';
+import { TEMP_DIR } from './editWindowManager';
 import { normPath, PendingRequest, PendingRequests } from './utils';
 import type {
 	AppendSessionOutputMessage, CloseWindowMessage, DisconnectMessage, EchoInputMessage,
@@ -166,7 +166,9 @@ export class AplRuntime extends EventEmitter {
 				// stopOnEntry: add line 1 to existing stops and execute.
 				// (1,⎕STOP name) preserves breakpoints set by initialiseBreakpoints.
 				// Don't await — the interpreter suspends at the first stop.
-				this.exec(0, '{}(1,⎕STOP name)⎕STOP name ⋄ ⍎name');
+				this.exec(0, '{}(1,⎕STOP name)⎕STOP name ⋄ ⍎name').catch(e => {
+					this.log(`stopOnEntry exec failed: ${e?.message ?? e}`);
+				});
 			} else {
 				await this.exec(0, '⍎name', 1);
 			}
@@ -468,7 +470,7 @@ export class AplRuntime extends EventEmitter {
 		delete this._windows[x.win];
 
 		// Clean up temp files created for no-Link tracing
-		if (filename.startsWith(AplRuntime._tmpDir)) {
+		if (filename.startsWith(TEMP_DIR)) {
 			try { fs.unlinkSync(filename); } catch {}
 		}
 
@@ -485,17 +487,17 @@ export class AplRuntime extends EventEmitter {
 	private _hasOpenWindows(): boolean {
 		return Object.keys(this._windows).length > 0;
 	}
-	private static readonly _tmpDir = Path.join(os.tmpdir(), 'vscode-apl');
+
 
 	private openWindow(x: OpenWindowMessage) {
 		// When no file is associated (no Link), create a temp file from
 		// the function source so VS Code can display it in the editor.
 		if (!x.filename && x.text?.length) {
-			if (!fs.existsSync(AplRuntime._tmpDir)) {
-				fs.mkdirSync(AplRuntime._tmpDir, { recursive: true });
+			if (!fs.existsSync(TEMP_DIR)) {
+				fs.mkdirSync(TEMP_DIR, { recursive: true });
 			}
 			const safeName = x.name.replace(/[⎕#./\\:*?"<>|]/g, '_');
-			const tmpFile = Path.join(AplRuntime._tmpDir, `${safeName}_${x.token}.aplf`);
+			const tmpFile = Path.join(TEMP_DIR, `${safeName}_${x.token}.aplf`);
 			fs.writeFileSync(tmpFile, x.text.join('\n'), 'utf8');
 			x.filename = tmpFile;
 		}

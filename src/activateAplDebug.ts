@@ -14,6 +14,7 @@ import { ReplManager } from './replManager';
 import { ReplViewProvider } from './replPanel';
 import { AplBacktickHandler } from './aplBacktick';
 import { handleHelp } from './aplHelp';
+import { cleanTempDir } from './editWindowManager';
 
 let aplStatusBarItem: vscode.StatusBarItem;
 
@@ -66,6 +67,7 @@ function getDyalogDebugConfigs(): DebugConfiguration[] {
 }
 
 export function activateAplDebug(context: vscode.ExtensionContext) {
+	cleanTempDir();
 
 	let lastStepTime = 0;
 
