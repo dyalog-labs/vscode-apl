@@ -12,11 +12,6 @@ interface EditWindowEntry {
 	entityType: number;
 }
 
-// entityType values for variables (from RIDE source):
-// 2: SimpleCharArray, 4: SimpleNumericArray, 8: MixedSimpleArray,
-// 16: NestedArray, 128: SimpleCharVector
-const VARIABLE_ENTITY_TYPES = new Set([2, 4, 8, 16, 128]);
-
 /** Shared temp directory for all vscode-apl temp files (edit windows and debug tracers). */
 export const TEMP_DIR = Path.join(os.tmpdir(), 'vscode-apl');
 
@@ -177,10 +172,11 @@ export class EditWindowManager implements vscode.Disposable {
 
 		let resolved = filename ? Path.resolve(filename) : '';
 
-		// The interpreter doesn't set `filename` for variables even when Link
-		// is active.  Consult the session's link cache so we open the linked
-		// file instead of an unlinked temp copy.
-		if (!resolved && VARIABLE_ENTITY_TYPES.has(entityType)) {
+		// The interpreter doesn't set `filename` for read-only windows
+		// (variables, namespaces, etc.) even when Link is active.  Consult
+		// the session's link cache so we open the linked file instead of
+		// an unlinked temp copy.
+		if (!resolved && args.readOnly === 1) {
 			const linkPath = await this._session.getLinkedFile(name, entityType);
 			if (linkPath) { resolved = Path.resolve(linkPath); }
 		}
@@ -201,12 +197,14 @@ export class EditWindowManager implements vscode.Disposable {
 		this._editWindows.set(token, { uri, tempFile, name, entityType });
 		this._editWindowsByUri.set(uri.toString(), token);
 
-		// For unlinked variables, ask the interpreter to switch the window to
-		// array-notation mode.  We defer opening the editor until the follow-up
-		// UpdateWindow arrives so VS Code never sees the (unsaveable) display
-		// form.  A 3 s fallback opens the buffer as-is if the interpreter can't
-		// convert (e.g. values containing references).
-		if (tempFile && VARIABLE_ENTITY_TYPES.has(entityType)) {
+		// For unlinked read-only windows (Dyalog's signal that the buffer
+		// is a value, not code), ask the interpreter to switch the window
+		// to array-notation mode.  We defer opening the editor until the
+		// follow-up UpdateWindow arrives so VS Code never sees the
+		// (unsaveable) display form.  A 3 s fallback opens the buffer
+		// as-is if the interpreter can't convert (e.g. values containing
+		// references, or a protected function that can't become APLAN).
+		if (tempFile && args.readOnly === 1) {
 			const fallback = setTimeout(() => {
 				this._pendingArrayNotation.delete(token);
 				this._showDoc(uri);
