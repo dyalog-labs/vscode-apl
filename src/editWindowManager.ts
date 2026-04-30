@@ -45,8 +45,10 @@ export class EditWindowManager implements vscode.Disposable {
 	private _editWindows = new Map<number, EditWindowEntry>();
 	/** Reverse lookup: URI string → RIDE token */
 	private _editWindowsByUri = new Map<string, number>();
-	/** Debounced serialisation timers, keyed by token */
-	private _serialiseTimers = new Map<number, ReturnType<typeof setTimeout>>();
+	/** Tokens awaiting the UpdateWindow that follows ShowAsArrayNotation.
+	 *  Value is a fallback timer that opens the display-form buffer if the
+	 *  interpreter never converts (e.g. the value contains references). */
+	private _pendingArrayNotation = new Map<number, ReturnType<typeof setTimeout>>();
 
 	private _disposables: vscode.Disposable[] = [];
 	/** Session listener references for removal in dispose() */
@@ -184,11 +186,25 @@ export class EditWindowManager implements vscode.Disposable {
 		this._editWindows.set(token, { uri, tempFile, name, entityType });
 		this._editWindowsByUri.set(uri.toString(), token);
 
-		// For variables, replace display form with array notation before opening
-		if (VARIABLE_ENTITY_TYPES.has(entityType) && tempFile) {
-			await this._serialiseToFile(name, uri.fsPath);
+		// For unlinked variables, ask the interpreter to switch the window to
+		// array-notation mode.  We defer opening the editor until the follow-up
+		// UpdateWindow arrives so VS Code never sees the (unsaveable) display
+		// form.  A 3 s fallback opens the buffer as-is if the interpreter can't
+		// convert (e.g. values containing references).
+		if (tempFile && VARIABLE_ENTITY_TYPES.has(entityType)) {
+			const fallback = setTimeout(() => {
+				this._pendingArrayNotation.delete(token);
+				this._showDoc(uri);
+			}, 3000);
+			this._pendingArrayNotation.set(token, fallback);
+			this._session.sendMessage('ShowAsArrayNotation', { win: token });
+			return;
 		}
 
+		await this._showDoc(uri);
+	}
+
+	private async _showDoc(uri: vscode.Uri): Promise<void> {
 		const doc = await vscode.workspace.openTextDocument(uri);
 		await vscode.window.showTextDocument(doc, { preview: false });
 	}
@@ -198,11 +214,6 @@ export class EditWindowManager implements vscode.Disposable {
 	private async _handleGotoEditWindow(win: number): Promise<void> {
 		const entry = this._editWindows.get(win);
 		if (!entry) { return; }
-
-		// Re-serialise variables to array notation (may have changed)
-		if (VARIABLE_ENTITY_TYPES.has(entry.entityType) && entry.tempFile) {
-			await this._serialiseToFile(entry.name, entry.uri.fsPath);
-		}
 
 		const doc = await vscode.workspace.openTextDocument(entry.uri);
 		await vscode.window.showTextDocument(doc, { preview: false });
@@ -215,50 +226,35 @@ export class EditWindowManager implements vscode.Disposable {
 		const entry = this._editWindows.get(args.token);
 		if (!entry) { return; }
 
-		if (entry.tempFile) {
-			const doc = vscode.workspace.textDocuments.find(
-				d => d.uri.toString() === entry.uri.toString()
-			);
-			if (doc?.isDirty) { return; }
+		// Linked files: Link's own watcher syncs disk → interpreter.  We
+		// don't write the buffer because Dyalog's UpdateWindow arrives in
+		// display form for non-APLAN variables and would clobber the source.
+		if (!entry.tempFile) { return; }
 
-			const content = (args.text || []).join('\n');
-			if (doc && doc.getText() !== content) {
-				fs.writeFileSync(entry.uri.fsPath, content, 'utf-8');
-			}
+		const content = (args.text || []).join('\n');
 
-			// Debounce: once updates stop, re-serialise to array notation
-			if (VARIABLE_ENTITY_TYPES.has(entry.entityType)) {
-				this._debouncedSerialise(args.token, entry.name, entry.uri.fsPath);
-			}
+		// First UpdateWindow after ShowAsArrayNotation: write the APLAN form
+		// and finally open the editor.  entityType has now flipped to 262144,
+		// so subsequent saves go via the uniform SaveChanges path below.
+		const fallback = this._pendingArrayNotation.get(args.token);
+		if (fallback) {
+			clearTimeout(fallback);
+			this._pendingArrayNotation.delete(args.token);
+			entry.entityType = args.entityType;
+			try { fs.writeFileSync(entry.uri.fsPath, content, 'utf-8'); } catch { /* ignore */ }
+			await this._showDoc(entry.uri);
+			return;
 		}
-	}
 
-	// --- Serialise helpers ---
-
-	private _debouncedSerialise(token: number, name: string, fsPath: string): void {
-		const prev = this._serialiseTimers.get(token);
-		if (prev) { clearTimeout(prev); }
-
-		this._serialiseTimers.set(token, setTimeout(() => {
-			this._serialiseTimers.delete(token);
-			this._serialiseToFile(name, fsPath);
-		}, 500));
-	}
-
-	private _serialiseToFile(name: string, fsPath: string): Promise<void> {
-		const aplPath = fsPath.replace(/\\/g, '/').replace(/'/g, "''");
-		return new Promise<void>((resolve) => {
-			const timeout = setTimeout(() => {
-				watcher.close();
-				resolve();
-			}, 5000);
-			const watcher = fs.watch(fsPath, { persistent: false }, () => {
-				clearTimeout(timeout);
-				watcher.close();
-				resolve();
-			});
-			this._session.execute(`(⊂↑⎕SE.Dyalog.Array.Serialise ${name})⎕NPUT'${aplPath}'1`);
-		});
+		// Routine update for an already-open window: refresh disk if the
+		// user has no pending edits.  VS Code's file watcher reloads it.
+		const doc = vscode.workspace.textDocuments.find(
+			d => d.uri.toString() === entry.uri.toString()
+		);
+		if (doc?.isDirty) { return; }
+		if (doc && doc.getText() !== content) {
+			fs.writeFileSync(entry.uri.fsPath, content, 'utf-8');
+		}
 	}
 
 	// --- Save / close ---
@@ -270,9 +266,8 @@ export class EditWindowManager implements vscode.Disposable {
 		const entry = this._editWindows.get(token);
 		if (!entry) { return; }
 
-		// For linked (non-temp) files, Link's file watcher syncs the change
-		// to the interpreter — sending our own update would duplicate work
-		// and can misparse .apla display form as array notation.
+		// Linked (non-temp) files: Link's watcher syncs disk → interpreter.
+		// Sending SaveChanges would duplicate the round-trip.
 		if (!entry.tempFile) { return; }
 
 		const lines = doc.getText().split(/\r?\n/);
@@ -280,12 +275,9 @@ export class EditWindowManager implements vscode.Disposable {
 			lines.pop();
 		}
 
-		if (VARIABLE_ENTITY_TYPES.has(entry.entityType)) {
-			const value = lines.join('\n');
-			this._session.execute(`${entry.name} ← ${value}`);
-			return;
-		}
-
+		// SaveChanges works uniformly for functions and array-notation
+		// variables — the interpreter parses the buffer based on the
+		// window's current entityType.
 		this._session.sendMessage('SaveChanges', {
 			win: token,
 			text: lines,
@@ -301,8 +293,8 @@ export class EditWindowManager implements vscode.Disposable {
 		if (token === undefined) { return; }
 
 		this._session.sendMessage('CloseWindow', { win: token });
-		const timer = this._serialiseTimers.get(token);
-		if (timer) { clearTimeout(timer); this._serialiseTimers.delete(token); }
+		const pending = this._pendingArrayNotation.get(token);
+		if (pending) { clearTimeout(pending); this._pendingArrayNotation.delete(token); }
 
 		const entry = this._editWindows.get(token);
 		if (entry?.tempFile) {
@@ -317,8 +309,8 @@ export class EditWindowManager implements vscode.Disposable {
 		const entry = this._editWindows.get(win);
 		if (!entry) { return; }
 
-		const timer = this._serialiseTimers.get(win);
-		if (timer) { clearTimeout(timer); this._serialiseTimers.delete(win); }
+		const pending = this._pendingArrayNotation.get(win);
+		if (pending) { clearTimeout(pending); this._pendingArrayNotation.delete(win); }
 
 		const uriStr = entry.uri.toString();
 
@@ -353,8 +345,8 @@ export class EditWindowManager implements vscode.Disposable {
 		}
 		this._editWindows.clear();
 		this._editWindowsByUri.clear();
-		for (const t of this._serialiseTimers.values()) { clearTimeout(t); }
-		this._serialiseTimers.clear();
+		for (const t of this._pendingArrayNotation.values()) { clearTimeout(t); }
+		this._pendingArrayNotation.clear();
 
 		for (const { event, fn } of this._sessionListeners) {
 			this._session.removeListener(event, fn);
