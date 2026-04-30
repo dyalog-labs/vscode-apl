@@ -15,12 +15,15 @@ interface EditWindowEntry {
 /** Shared temp directory for all vscode-apl temp files (edit windows and debug tracers). */
 export const TEMP_DIR = Path.join(os.tmpdir(), 'vscode-apl');
 
-/** Remove leftover temp files from a previous session (e.g. after a crash). */
+/** Remove leftover temp files and per-REPL subdirs from a previous session
+ *  (e.g. after a crash).  Uses rmSync with recursive+force so it handles
+ *  both files (edit-window temp files at the top level) and directories
+ *  (per-REPL tracer dirs). */
 export function cleanTempDir(): void {
 	if (!fs.existsSync(TEMP_DIR)) { return; }
 	try {
-		for (const file of fs.readdirSync(TEMP_DIR)) {
-			try { fs.unlinkSync(Path.join(TEMP_DIR, file)); } catch { /* ignore */ }
+		for (const entry of fs.readdirSync(TEMP_DIR)) {
+			try { fs.rmSync(Path.join(TEMP_DIR, entry), { recursive: true, force: true }); } catch { /* ignore */ }
 		}
 	} catch { /* ignore */ }
 }
@@ -34,6 +37,9 @@ export function cleanTempDir(): void {
 export class EditWindowManager implements vscode.Disposable {
 
 	private _session: AplSession;
+	/** REPL identifier; used as the temp-dir subfolder so edit-window files
+	 *  share the same per-REPL layout as debug tracer files. */
+	private _replId: string;
 
 	/** RIDE token → editor file info */
 	private _editWindows = new Map<number, EditWindowEntry>();
@@ -53,8 +59,9 @@ export class EditWindowManager implements vscode.Disposable {
 	/** Session listener references for removal in dispose() */
 	private _sessionListeners: Array<{ event: string; fn: (...args: any[]) => void }> = [];
 
-	constructor(session: AplSession) {
+	constructor(session: AplSession, replId: string) {
 		this._session = session;
+		this._replId = replId;
 		this._setupListeners();
 	}
 
@@ -184,10 +191,14 @@ export class EditWindowManager implements vscode.Disposable {
 		if (resolved && fs.existsSync(resolved)) {
 			uri = vscode.Uri.file(resolved);
 		} else {
-			fs.mkdirSync(TEMP_DIR, { recursive: true });
+			// Per-REPL subdir, no token in the filename — same layout that
+			// aplRuntime uses for tracer temp files, so paths stay stable
+			// across sessions and don't collide across REPLs.
+			const replDir = Path.join(TEMP_DIR, this._replId);
+			fs.mkdirSync(replDir, { recursive: true });
 
 			const safeName = name.replace(/[⎕#./\\:*?"<>|]/g, '_');
-			const filepath = Path.join(TEMP_DIR, `${safeName}_${token}.apl`);
+			const filepath = Path.join(replDir, `${safeName}.apl`);
 			fs.writeFileSync(filepath, content, 'utf-8');
 
 			uri = vscode.Uri.file(filepath);
@@ -201,14 +212,16 @@ export class EditWindowManager implements vscode.Disposable {
 		// is a value, not code), ask the interpreter to switch the window
 		// to array-notation mode.  We defer opening the editor until the
 		// follow-up UpdateWindow arrives so VS Code never sees the
-		// (unsaveable) display form.  A 3 s fallback opens the buffer
+		// (unsaveable) display form.  A 1 s fallback opens the buffer
 		// as-is if the interpreter can't convert (e.g. values containing
 		// references, or a protected function that can't become APLAN).
+		// Real responses are sub-100ms; longer waits mean Dyalog is
+		// stuck and no timeout would actually help.
 		if (tempFile && args.readOnly === 1) {
 			const fallback = setTimeout(() => {
 				this._pendingArrayNotation.delete(token);
 				this._showDoc(uri);
-			}, 3000);
+			}, 1000);
 			this._pendingArrayNotation.set(token, fallback);
 			this._session.sendMessage('ShowAsArrayNotation', { win: token });
 			return;

@@ -109,6 +109,10 @@ export class AplRuntime extends EventEmitter {
 
 	private _session?: AplSession;
 	private _autoDebug = false;  // True when debug session was auto-started on error
+	/** Identifier of the REPL this debug session is attached to.  Used to
+	 *  give tracer temp files a stable, per-REPL path so VS Code-persisted
+	 *  breakpoints reapply across debug sessions. */
+	private _replId = 'default';
 
 	private _winId = 0; // current window id
 	public get winId(): number { return this._winId; }
@@ -128,8 +132,9 @@ export class AplRuntime extends EventEmitter {
 	 * Attach to an existing AplSession (REPL) instead of spawning new interpreter.
 	 * This allows debugging within the same Dyalog session as the REPL.
 	 */
-	public async attachToSession(session: AplSession, program: string, folder: string, stopOnEntry: boolean, noDebug: boolean): Promise<void> {
+	public async attachToSession(session: AplSession, replId: string, program: string, folder: string, stopOnEntry: boolean, noDebug: boolean): Promise<void> {
 		this._session = session;
+		this._replId = replId;
 		this._noDebug = noDebug;
 		this._sourceFile = program;
 		this._folder = folder;
@@ -191,8 +196,9 @@ export class AplRuntime extends EventEmitter {
 	 * Registers as the debug handler, gets link info, then replays buffered messages
 	 * so the debugger renders the suspended state.
 	 */
-	public async attachToSuspendedSession(session: AplSession, folder: string): Promise<void> {
+	public async attachToSuspendedSession(session: AplSession, replId: string, folder: string): Promise<void> {
 		this._session = session;
+		this._replId = replId;
 		this._autoDebug = true;
 		this._noDebug = false;
 		this._sourceFile = '';
@@ -494,12 +500,16 @@ export class AplRuntime extends EventEmitter {
 	private openWindow(x: OpenWindowMessage) {
 		// When no file is associated (no Link), create a temp file from
 		// the function source so VS Code can display it in the editor.
+		// Use a per-REPL subdir so the filename stays stable across debug
+		// sessions (VS Code persists breakpoints by file path).  No
+		// cross-REPL collision because each REPL gets its own subdir.
 		if (!x.filename && x.text?.length) {
-			if (!fs.existsSync(TEMP_DIR)) {
-				fs.mkdirSync(TEMP_DIR, { recursive: true });
+			const replDir = Path.join(TEMP_DIR, this._replId);
+			if (!fs.existsSync(replDir)) {
+				fs.mkdirSync(replDir, { recursive: true });
 			}
 			const safeName = x.name.replace(/[⎕#./\\:*?"<>|]/g, '_');
-			const tmpFile = Path.join(TEMP_DIR, `${safeName}_${x.token}.aplf`);
+			const tmpFile = Path.join(replDir, `${safeName}.aplf`);
 			fs.writeFileSync(tmpFile, x.text.join('\n'), 'utf8');
 			x.filename = tmpFile;
 
