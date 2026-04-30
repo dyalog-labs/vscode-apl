@@ -340,6 +340,16 @@ export function activateAplDebug(context: vscode.ExtensionContext) {
 			if (replId) {
 				replManager.closeTempTab(replId, customEvent.body.filename);
 			}
+		} else if (customEvent.event === 'openTempTab') {
+			const replId = (customEvent.session.configuration as any).replId;
+			if (replId) {
+				replManager.openTempTab(
+					replId,
+					customEvent.body.filename,
+					customEvent.body.token,
+					customEvent.body.stops,
+				);
+			}
 		}
 	}));
 

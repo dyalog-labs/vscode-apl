@@ -49,6 +49,11 @@ export class EditWindowManager implements vscode.Disposable {
 	 *  Value is a fallback timer that opens the display-form buffer if the
 	 *  interpreter never converts (e.g. the value contains references). */
 	private _pendingArrayNotation = new Map<number, ReturnType<typeof setTimeout>>();
+	/** Debug tracer temp files keyed by URI string.  While `alive` is true
+	 *  the RIDE token is still valid, so saves can route through SaveChanges
+	 *  (preserving stops).  After Dyalog reaps the token (closeTempTab),
+	 *  alive flips to false and saves fall back to ⎕FIX. */
+	private _tracerTempFiles = new Map<string, { token: number; stops: number[]; alive: boolean }>();
 
 	private _disposables: vscode.Disposable[] = [];
 	/** Session listener references for removal in dispose() */
@@ -116,29 +121,35 @@ export class EditWindowManager implements vscode.Disposable {
 	}
 
 	/**
-	 * Close the VS Code tab for a temp file and delete it.
-	 * Called when a debug tracer window closes so the orphaned tab doesn't linger.
-	 * If the document has unsaved edits, ⎕FIX them into the interpreter first
-	 * so the user's changes are not lost.
+	 * Register a temp file backing a debug tracer window.  Saves on this
+	 * file route through SaveChanges while the token is alive (preserving
+	 * stops) and through ⎕FIX once Dyalog has reaped the token.
+	 */
+	public openTempTab(filename: string, token: number, stops: number[]): void {
+		this._tracerTempFiles.set(
+			vscode.Uri.file(filename).toString(),
+			{ token, stops, alive: true },
+		);
+	}
+
+	/**
+	 * Close the VS Code tab for a temp tracer file and delete the file.
+	 * Called when a debug tracer window closes.  If the buffer is dirty,
+	 * VS Code's native Save / Don't Save / Cancel dialog fires; "Save"
+	 * routes through _handleDocumentSaved → ⎕FIX, so we don't need our
+	 * own prompt.  Cancel leaves the file in place.
 	 */
 	public async closeTempTab(filename: string): Promise<void> {
 		const uri = vscode.Uri.file(filename);
 		const uriStr = uri.toString();
 
-		// If the user has unsaved edits, ⎕FIX them before closing.
-		const doc = vscode.workspace.textDocuments.find(
-			d => d.uri.toString() === uriStr
-		);
-		if (doc?.isDirty) {
-			const lines = doc.getText().split(/\r?\n/);
-			if (lines.length > 0 && lines[lines.length - 1] === '') {
-				lines.pop();
-			}
-			const quoted = lines.map(l => `'${l.replace(/'/g, "''")}'`).join(' ');
-			this._session.execute(`2 ⎕FIX ${quoted}`);
-		}
+		// Dyalog has reaped the tracer token — mark dead so any save that
+		// follows the dirty-prompt falls back to ⎕FIX.  Keep the entry in
+		// the map so _handleDocumentSaved can still find the URI.
+		const entry = this._tracerTempFiles.get(uriStr);
+		if (entry) { entry.alive = false; }
 
-		const closePromises: Thenable<unknown>[] = [];
+		const closePromises: Thenable<boolean>[] = [];
 		for (const group of vscode.window.tabGroups.all) {
 			for (const tab of group.tabs) {
 				if (tab.input instanceof vscode.TabInputText && tab.input.uri.toString() === uriStr) {
@@ -146,8 +157,10 @@ export class EditWindowManager implements vscode.Disposable {
 				}
 			}
 		}
-		await Promise.all(closePromises);
+		const results = await Promise.all(closePromises);
+		if (!results.every(r => r)) { return; }  // close cancelled — keep file in place
 
+		this._tracerTempFiles.delete(uriStr);
 		try { fs.unlinkSync(uri.fsPath); } catch { /* ignore */ }
 	}
 
@@ -260,7 +273,29 @@ export class EditWindowManager implements vscode.Disposable {
 	// --- Save / close ---
 
 	private _handleDocumentSaved(doc: vscode.TextDocument): void {
-		const token = this._editWindowsByUri.get(doc.uri.toString());
+		const uriStr = doc.uri.toString();
+
+		// Tracer temp file: SaveChanges while the RIDE token is alive
+		// (preserves stops); ⎕FIX once Dyalog has reaped it.
+		const tracer = this._tracerTempFiles.get(uriStr);
+		if (tracer) {
+			const lines = this._bufferLines(doc);
+			if (tracer.alive) {
+				this._session.sendMessage('SaveChanges', {
+					win: tracer.token,
+					text: lines,
+					stop: tracer.stops,
+					trace: [],
+					monitor: [],
+				});
+			} else {
+				const quoted = lines.map(l => `'${l.replace(/'/g, "''")}'`).join(' ');
+				this._session.execute(`2 ⎕FIX ${quoted}`);
+			}
+			return;
+		}
+
+		const token = this._editWindowsByUri.get(uriStr);
 		if (token === undefined) { return; }
 
 		const entry = this._editWindows.get(token);
@@ -270,21 +305,24 @@ export class EditWindowManager implements vscode.Disposable {
 		// Sending SaveChanges would duplicate the round-trip.
 		if (!entry.tempFile) { return; }
 
-		const lines = doc.getText().split(/\r?\n/);
-		if (lines.length > 0 && lines[lines.length - 1] === '') {
-			lines.pop();
-		}
-
 		// SaveChanges works uniformly for functions and array-notation
 		// variables — the interpreter parses the buffer based on the
 		// window's current entityType.
 		this._session.sendMessage('SaveChanges', {
 			win: token,
-			text: lines,
+			text: this._bufferLines(doc),
 			stop: [],
 			trace: [],
 			monitor: [],
 		});
+	}
+
+	private _bufferLines(doc: vscode.TextDocument): string[] {
+		const lines = doc.getText().split(/\r?\n/);
+		if (lines.length > 0 && lines[lines.length - 1] === '') {
+			lines.pop();
+		}
+		return lines;
 	}
 
 	private _handleTabClosed(uri: vscode.Uri): void {
@@ -347,6 +385,7 @@ export class EditWindowManager implements vscode.Disposable {
 		this._editWindowsByUri.clear();
 		for (const t of this._pendingArrayNotation.values()) { clearTimeout(t); }
 		this._pendingArrayNotation.clear();
+		this._tracerTempFiles.clear();
 
 		for (const { event, fn } of this._sessionListeners) {
 			this._session.removeListener(event, fn);

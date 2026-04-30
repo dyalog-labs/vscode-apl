@@ -197,6 +197,11 @@ export class ReplManager implements vscode.Disposable {
 		this.activeTab?.editWindowManager.editDefinition(name);
 	}
 
+	/** Register a temp file backing a debug tracer window. */
+	public openTempTab(replId: string, filename: string, token: number, stops: number[]): void {
+		this.getTab(replId)?.editWindowManager.openTempTab(filename, token, stops);
+	}
+
 	/** Close a temp file tab left over from a debug tracer window. */
 	public closeTempTab(replId: string, filename: string): void {
 		this.getTab(replId)?.editWindowManager.closeTempTab(filename);

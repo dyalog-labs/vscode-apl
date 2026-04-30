@@ -104,6 +104,9 @@ export class AplDebugSession extends LoggingDebugSession {
 		this._runtime.on('closeTempTab', (opt: { filename: string }) => {
 			this.sendEvent(new Event('closeTempTab', opt));
 		});
+		this._runtime.on('openTempTab', (opt: { filename: string; token: number; stops: number[] }) => {
+			this.sendEvent(new Event('openTempTab', opt));
+		});
 		this._runtime.on('openWindow', (opt: OpenWindowMessage) => {
 			vscode.window.showTextDocument(vscode.Uri.file(opt.filename));
 		});

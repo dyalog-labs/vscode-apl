@@ -502,6 +502,16 @@ export class AplRuntime extends EventEmitter {
 			const tmpFile = Path.join(TEMP_DIR, `${safeName}_${x.token}.aplf`);
 			fs.writeFileSync(tmpFile, x.text.join('\n'), 'utf8');
 			x.filename = tmpFile;
+
+			// Tell EditWindowManager.  Pass the token + initial stops so
+			// mid-debug Ctrl+S can route through SaveChanges (preserving
+			// breakpoints).  When the token is reaped on debug end the
+			// manager falls back to ⎕FIX.
+			this.sendEvent('openTempTab', {
+				filename: tmpFile,
+				token: x.token,
+				stops: x.stop ?? [],
+			});
 		}
 		this._windows[x.token] = x;
 		this._winId = x.token;
