@@ -158,8 +158,18 @@ export class EditWindowManager implements vscode.Disposable {
 		let uri: vscode.Uri;
 		let tempFile = false;
 
-		if (filename && fs.existsSync(filename)) {
-			uri = vscode.Uri.file(filename);
+		let resolved = filename ? Path.resolve(filename) : '';
+
+		// The interpreter doesn't set `filename` for variables even when Link
+		// is active.  Consult the session's link cache so we open the linked
+		// file instead of an unlinked temp copy.
+		if (!resolved && VARIABLE_ENTITY_TYPES.has(entityType)) {
+			const linkPath = await this._session.getLinkedFile(name, entityType);
+			if (linkPath) { resolved = Path.resolve(linkPath); }
+		}
+
+		if (resolved && fs.existsSync(resolved)) {
+			uri = vscode.Uri.file(resolved);
 		} else {
 			fs.mkdirSync(TEMP_DIR, { recursive: true });
 
@@ -259,6 +269,11 @@ export class EditWindowManager implements vscode.Disposable {
 
 		const entry = this._editWindows.get(token);
 		if (!entry) { return; }
+
+		// For linked (non-temp) files, Link's file watcher syncs the change
+		// to the interpreter — sending our own update would duplicate work
+		// and can misparse .apla display form as array notation.
+		if (!entry.tempFile) { return; }
 
 		const lines = doc.getText().split(/\r?\n/);
 		if (lines.length > 0 && lines[lines.length - 1] === '') {

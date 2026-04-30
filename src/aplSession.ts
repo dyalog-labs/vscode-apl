@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as Net from 'net';
+import * as os from 'os';
 import * as Path from 'path';
 import * as vscode from 'vscode';
 import { findDyalogExe } from './findDyalog';
@@ -33,6 +34,11 @@ export class AplSession extends EventEmitter {
 	private _pendingDebugMessages: Array<[string, any]> = [];
 	private _isSuspended = false;
 	private _editWindowTokens = new Set<number>();
+
+	// Cache for ⎕SE.Link.GetFileName lookups (name → linked path | undefined).
+	// Populated lazily; cleared on disconnect.
+	private _linkFileCache = new Map<string, string | undefined>();
+	private _linkFilePending = new Map<string, Promise<string | undefined>>();
 
 	public constructor() {
 		super();
@@ -271,6 +277,8 @@ export class AplSession extends EventEmitter {
 		this._pendingDebugMessages = [];
 		this._isSuspended = false;
 		this._editWindowTokens.clear();
+		this._linkFileCache.clear();
+		this._linkFilePending.clear();
 		this.setState('disconnected');
 	}
 
@@ -293,6 +301,63 @@ export class AplSession extends EventEmitter {
 		}
 		const text = code.endsWith('\n') ? code : `${code}\n`;
 		this.sendMessage('Execute', { trace, text });
+	}
+
+	/**
+	 * Look up the Link-managed file path of a name (e.g. a linked variable).
+	 * Returns undefined if Link isn't active or the name isn't linked.
+	 * Results are cached for the lifetime of the connection; the first call for
+	 * each name runs a ⎕SE.Link.GetFileName round-trip via a scratch file.
+	 */
+	public async getLinkedFile(name: string, _entityType?: number): Promise<string | undefined> {
+		if (this._linkFileCache.has(name)) {
+			return this._linkFileCache.get(name);
+		}
+		const pending = this._linkFilePending.get(name);
+		if (pending) { return pending; }
+
+		const promise = this._queryLinkedFile(name);
+		this._linkFilePending.set(name, promise);
+		try {
+			const result = await promise;
+			this._linkFileCache.set(name, result);
+			return result;
+		} finally {
+			this._linkFilePending.delete(name);
+		}
+	}
+
+	private _queryLinkedFile(name: string): Promise<string | undefined> {
+		const tmpDir = Path.join(os.tmpdir(), 'vscode-apl');
+		fs.mkdirSync(tmpDir, { recursive: true });
+		const scratchFile = Path.join(tmpDir, `_linkquery_${Date.now()}_${Math.random().toString(36).slice(2)}.txt`);
+		const aplPath = scratchFile.replace(/\\/g, '/').replace(/'/g, "''");
+		const escapedName = name.replace(/'/g, "''");
+
+		return new Promise<string | undefined>((resolve) => {
+			const finish = (result: string | undefined) => {
+				try { fs.unlinkSync(scratchFile); } catch { /* ignore */ }
+				resolve(result);
+			};
+			const timeout = setTimeout(() => {
+				watcher.close();
+				finish(undefined);
+			}, 2000);
+			const watcher = fs.watch(tmpDir, { persistent: false }, (_, fn) => {
+				if (fn !== Path.basename(scratchFile)) { return; }
+				clearTimeout(timeout);
+				watcher.close();
+				try {
+					const content = fs.readFileSync(scratchFile, 'utf-8').trim();
+					finish(content || undefined);
+				} catch {
+					finish(undefined);
+				}
+			});
+			// Always write a file so we don't wait for the full timeout on empty results.
+			// 6:: catches VALUE ERROR if the Link namespace isn't available.
+			this.execute(`{6::(⊂'')⎕NPUT'${aplPath}'1 ⋄ (⊂⎕SE.Link.GetFileName '${escapedName}')⎕NPUT'${aplPath}'1}⍬`);
+		});
 	}
 
 	/**
