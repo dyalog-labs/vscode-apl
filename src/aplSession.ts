@@ -579,6 +579,17 @@ export class AplSession extends EventEmitter {
 				}
 				break;
 
+			case 'OptionsDialog':
+				// Dyalog raises this for errors like a SaveChanges parse
+				// failure ("can't fix").  If we never reply, the interpreter
+				// blocks waiting for our index.  In debug mode aplRuntime's
+				// own handler runs first; in REPL mode we surface it as a
+				// VS Code modal and route the user's choice back.
+				if (!this._debugHandler) {
+					this._handleOptionsDialog(args);
+				}
+				break;
+
 			case 'StatusOutput':
 				this.emit('output', args.text, 'error');
 				break;
@@ -606,6 +617,32 @@ export class AplSession extends EventEmitter {
 				this.emit('end');
 				break;
 		}
+	}
+
+	/**
+	 * Surface an OptionsDialog (e.g. Dyalog's "can't fix" save error) as a
+	 * VS Code modal and route the user's choice back via ReplyOptionsDialog.
+	 * Crucial: Dyalog blocks until we reply, so dismissing without an
+	 * answer would deadlock the interpreter.  We treat Esc as the last
+	 * option (typically Cancel/No).
+	 */
+	private async _handleOptionsDialog(args: any): Promise<void> {
+		const options: string[] = Array.isArray(args.options) ? args.options : [];
+		const message: string = args.text || args.title || 'Dyalog dialog';
+		let index = options.length - 1;
+		if (options.length > 0) {
+			const choice = await vscode.window.showWarningMessage(
+				message, { modal: true }, ...options,
+			);
+			if (choice !== undefined) {
+				const found = options.indexOf(choice);
+				if (found >= 0) { index = found; }
+			}
+		} else {
+			vscode.window.showWarningMessage(message);
+			index = 0;
+		}
+		this.sendMessage('ReplyOptionsDialog', { token: args.token, index });
 	}
 
 	/**

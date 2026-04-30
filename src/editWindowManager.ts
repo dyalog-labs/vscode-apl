@@ -39,7 +39,6 @@ export function cleanTempDir(): void {
 export class EditWindowManager implements vscode.Disposable {
 
 	private _session: AplSession;
-	private _onOutput: (type: string, text: string) => void;
 
 	/** RIDE token → editor file info */
 	private _editWindows = new Map<number, EditWindowEntry>();
@@ -59,9 +58,8 @@ export class EditWindowManager implements vscode.Disposable {
 	/** Session listener references for removal in dispose() */
 	private _sessionListeners: Array<{ event: string; fn: (...args: any[]) => void }> = [];
 
-	constructor(session: AplSession, onOutput: (type: string, text: string) => void) {
+	constructor(session: AplSession) {
 		this._session = session;
-		this._onOutput = onOutput;
 		this._setupListeners();
 	}
 
@@ -89,7 +87,11 @@ export class EditWindowManager implements vscode.Disposable {
 
 		this._onSession('replySaveChanges', (args: ReplySaveChangesMessage) => {
 			if (args.err) {
-				this._onOutput('error', `Save failed for window ${args.win}: error ${args.err}`);
+				const entry = this._editWindows.get(args.win);
+				const target = entry ? `"${entry.name}"` : `window ${args.win}`;
+				vscode.window.showErrorMessage(
+					`Cannot fix ${target}: interpreter rejected the save (error ${args.err}).`,
+				);
 			}
 		});
 

@@ -40,7 +40,7 @@ export class ReplTab implements vscode.Disposable {
 		this._session = session;
 		this._manager = manager;
 
-		this._editWindowManager = new EditWindowManager(session, (type, text) => this._appendOutput(type, text));
+		this._editWindowManager = new EditWindowManager(session);
 		this._setupSessionListeners();
 		this._setupDebugListeners();
 	}
