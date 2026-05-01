@@ -184,7 +184,7 @@ export class EditWindowManager implements vscode.Disposable {
 		// the session's link cache so we open the linked file instead of
 		// an unlinked temp copy.
 		if (!resolved && args.readOnly === 1) {
-			const linkPath = await this._session.getLinkedFile(name, entityType);
+			const linkPath = await this._session.getLinkedFile(name);
 			if (linkPath) { resolved = Path.resolve(linkPath); }
 		}
 

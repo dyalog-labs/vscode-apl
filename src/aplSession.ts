@@ -2,12 +2,17 @@ import { EventEmitter } from 'events';
 import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as Net from 'net';
-import * as os from 'os';
 import * as Path from 'path';
 import * as vscode from 'vscode';
 import { findDyalogExe } from './findDyalog';
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'busy';
+
+export interface LinkInfoRow {
+	aplName: string;
+	filePath: string;
+	startLine: number;
+}
 
 /**
  * Manages a shared APL interpreter session via RIDE protocol.
@@ -35,10 +40,15 @@ export class AplSession extends EventEmitter {
 	private _isSuspended = false;
 	private _editWindowTokens = new Set<number>();
 
-	// Cache for ⎕SE.Link.GetFileName lookups (name → linked path | undefined).
-	// Populated lazily; cleared on disconnect.
-	private _linkFileCache = new Map<string, string | undefined>();
-	private _linkFilePending = new Map<string, Promise<string | undefined>>();
+	// Cached Link info — bulk-fetched once via 5177⌶, shared by AplRuntime,
+	// ReplBreakpointSync, and editWindowManager. Cleared on disconnect.
+	private _linkInfo: LinkInfoRow[] = [];
+	private _linkMap = new Map<string, string>();
+	private _linkInfoLoading?: Promise<void>;
+	private _linkInfoLoaded = false;
+
+	// One-shot echo waiter for awaitable Execute calls (loadLinkInfo).
+	private _pendingEcho?: { text: string; resolve: () => void };
 
 	public constructor() {
 		super();
@@ -277,8 +287,11 @@ export class AplSession extends EventEmitter {
 		this._pendingDebugMessages = [];
 		this._isSuspended = false;
 		this._editWindowTokens.clear();
-		this._linkFileCache.clear();
-		this._linkFilePending.clear();
+		this._linkInfo = [];
+		this._linkMap.clear();
+		this._linkInfoLoaded = false;
+		this._linkInfoLoading = undefined;
+		this._pendingEcho = undefined;
 		this.setState('disconnected');
 	}
 
@@ -303,60 +316,107 @@ export class AplSession extends EventEmitter {
 		this.sendMessage('Execute', { trace, text });
 	}
 
-	/**
-	 * Look up the Link-managed file path of a name (e.g. a linked variable).
-	 * Returns undefined if Link isn't active or the name isn't linked.
-	 * Results are cached for the lifetime of the connection; the first call for
-	 * each name runs a ⎕SE.Link.GetFileName round-trip via a scratch file.
-	 */
-	public async getLinkedFile(name: string, _entityType?: number): Promise<string | undefined> {
-		if (this._linkFileCache.has(name)) {
-			return this._linkFileCache.get(name);
-		}
-		const pending = this._linkFilePending.get(name);
-		if (pending) { return pending; }
-
-		const promise = this._queryLinkedFile(name);
-		this._linkFilePending.set(name, promise);
-		try {
-			const result = await promise;
-			this._linkFileCache.set(name, result);
-			return result;
-		} finally {
-			this._linkFilePending.delete(name);
-		}
+	/** Snapshot of cached Link rows (empty if Link is inactive or load hasn't run). */
+	public get linkInfo(): readonly LinkInfoRow[] {
+		return this._linkInfo;
 	}
 
-	private _queryLinkedFile(name: string): Promise<string | undefined> {
-		const tmpDir = Path.join(os.tmpdir(), 'vscode-apl');
-		fs.mkdirSync(tmpDir, { recursive: true });
-		const scratchFile = Path.join(tmpDir, `_linkquery_${Date.now()}_${Math.random().toString(36).slice(2)}.txt`);
-		const aplPath = scratchFile.replace(/\\/g, '/').replace(/'/g, "''");
-		const escapedName = name.replace(/'/g, "''");
+	/** Sync map lookup. Empty until loadLinkInfo completes. */
+	public linkedFileFor(name: string): string | undefined {
+		return this._linkMap.get(name);
+	}
 
-		return new Promise<string | undefined>((resolve) => {
-			const finish = (result: string | undefined) => {
-				try { fs.unlinkSync(scratchFile); } catch { /* ignore */ }
-				resolve(result);
+	/**
+	 * Look up the file backing a linked APL name. Async to keep the API stable
+	 * while a load may still be in flight (callers attach immediately after the
+	 * session emits 'ready', before loadLinkInfo's promise has settled).
+	 */
+	public async getLinkedFile(name: string): Promise<string | undefined> {
+		if (this._linkInfoLoading) { await this._linkInfoLoading; }
+		return this._linkMap.get(name);
+	}
+
+	/**
+	 * Bulk-fetch the interpreter's Link table via 5177⌶ and cache it.
+	 * Idempotent: returns immediately if already loaded; coalesces concurrent
+	 * callers onto a single in-flight promise. Silently no-ops without a
+	 * folder (debug-only sessions, no workspace) or when Link is unavailable.
+	 */
+	public async loadLinkInfo(folder: string): Promise<void> {
+		if (this._linkInfoLoaded) { return; }
+		if (this._linkInfoLoading) { return this._linkInfoLoading; }
+		if (!folder || !this.isConnected) { return; }
+
+		this._linkInfoLoading = this._doLoadLinkInfo(folder).finally(() => {
+			this._linkInfoLoading = undefined;
+		});
+		return this._linkInfoLoading;
+	}
+
+	/** Drop cached Link info and re-fetch. Used when Link state may have changed. */
+	public async refreshLinkInfo(folder: string): Promise<void> {
+		this._linkInfoLoaded = false;
+		this._linkInfo = [];
+		this._linkMap.clear();
+		return this.loadLinkInfo(folder);
+	}
+
+	private async _doLoadLinkInfo(folder: string): Promise<void> {
+		const linkPath = Path.join(folder, '.vscode', 'link.json');
+		const linkDir = Path.dirname(linkPath);
+		try { fs.mkdirSync(linkDir, { recursive: true }); } catch { /* ignore */ }
+		try { fs.unlinkSync(linkPath); } catch { /* ignore */ }
+
+		const aplPath = linkPath.replace(/\\/g, '/').replace(/'/g, "''");
+		// Guard with ⎕SE.Link.Links — 5177⌶ can return stale entries after
+		// unlinking. 6:: catches VALUE ERROR if the Link API is unavailable.
+		// Echo arrives on receipt, not completion — a no-op afterward gives
+		// a second echo that confirms the file write is done.
+		await this._executeAndAwaitEcho(
+			`{6::⍬ ⋄ 0=≢⎕SE.Link.Links:⍬ ⋄ r←5177⌶⍬ ⋄ 0=≢r:⍬ ⋄ (⊂⎕JSON ⍕¨¨r)⎕NPUT '${aplPath}' 1}⍬`
+		);
+		await this._executeAndAwaitEcho('⍬');
+
+		if (!fs.existsSync(linkPath)) {
+			this._linkInfoLoaded = true;
+			return;
+		}
+		try {
+			const json = fs.readFileSync(linkPath, 'utf-8');
+			const rows: LinkInfoRow[] = JSON.parse(json)
+				.filter((row: string[]) => row[1] !== '⎕SE')
+				.map((row: string[]) => {
+					const aplName = row[0][0] === '#' ? row[0] : `${row[1]}.${row[0]}`;
+					const filePath = Path.resolve(row[3]);
+					const startLine = +row[4];
+					return { aplName, filePath, startLine };
+				});
+			this._linkInfo = rows;
+			this._linkMap.clear();
+			for (const r of rows) {
+				this._linkMap.set(r.aplName, r.filePath);
+				this._linkMap.set(r.filePath, r.aplName);
+			}
+		} catch (e) {
+			this.log(`Failed to parse link info: ${(e as Error).message}`);
+		}
+		this._linkInfoLoaded = true;
+	}
+
+	private _executeAndAwaitEcho(expression: string, timeoutMs = 5000): Promise<void> {
+		const text = expression.endsWith('\n') ? expression : `${expression}\n`;
+		return new Promise<void>((resolve) => {
+			let done = false;
+			const finish = () => {
+				if (done) { return; }
+				done = true;
+				if (this._pendingEcho?.text === text) { this._pendingEcho = undefined; }
+				clearTimeout(timer);
+				resolve();
 			};
-			const timeout = setTimeout(() => {
-				watcher.close();
-				finish(undefined);
-			}, 2000);
-			const watcher = fs.watch(tmpDir, { persistent: false }, (_, fn) => {
-				if (fn !== Path.basename(scratchFile)) { return; }
-				clearTimeout(timeout);
-				watcher.close();
-				try {
-					const content = fs.readFileSync(scratchFile, 'utf-8').trim();
-					finish(content || undefined);
-				} catch {
-					finish(undefined);
-				}
-			});
-			// Always write a file so we don't wait for the full timeout on empty results.
-			// 6:: catches VALUE ERROR if the Link namespace isn't available.
-			this.execute(`{6::(⊂'')⎕NPUT'${aplPath}'1 ⋄ (⊂⎕SE.Link.GetFileName '${escapedName}')⎕NPUT'${aplPath}'1}⍬`);
+			this._pendingEcho = { text, resolve: finish };
+			const timer = setTimeout(finish, timeoutMs);
+			this.sendMessage('Execute', { trace: 0, text });
 		});
 	}
 
@@ -507,12 +567,18 @@ export class AplSession extends EventEmitter {
 				this.emit('output', output, 'result');
 				break;
 
-			case 'EchoInput':
-				// Skip if debug handler is attached (it will handle echo)
+			case 'EchoInput': {
+				// Wake any one-shot echo waiter (loadLinkInfo) — runs alongside
+				// debug-handler forwarding so awaitable Executes work in any state.
+				const pending = this._pendingEcho;
+				if (pending && pending.text === args.input) {
+					pending.resolve();
+				}
 				if (!this._debugHandler) {
 					this.emit('echo', args.input);
 				}
 				break;
+			}
 
 			case 'HadError':
 				if (!this._debugHandler) {

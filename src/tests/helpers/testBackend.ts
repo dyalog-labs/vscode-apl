@@ -7,6 +7,7 @@ import { AplRuntime, FileAccessor } from '../../aplRuntime';
 import { AplSession } from '../../aplSession';
 import { findDyalogExe } from '../../findDyalog';
 import { MockRideServer } from './mockRideServer';
+import { seedLinkInfo } from './sessionTestUtils';
 
 /**
  * Abstraction over what's providing the RIDE server — either a MockRideServer
@@ -22,7 +23,7 @@ export interface TestBackend {
 	 * Define a function in the interpreter and make it available for breakpoints.
 	 * Returns the file path and startLine for use with setBreakPoint().
 	 *
-	 * Mock: injects _linkInfo entries directly.
+	 * Mock: injects link info via the session test seam.
 	 * Dyalog: writes an .aplf file, Links the workspace, reads linkInfo via 5177⌶.
 	 */
 	defineFunction(name: string, text: string[]): Promise<{ filePath: string; startLine: number }>;
@@ -99,8 +100,8 @@ export class MockBackend implements TestBackend {
 	async defineFunction(name: string, _text: string[]): Promise<{ filePath: string; startLine: number }> {
 		const filePath = `/mock/${name}.aplf`;
 		const startLine = 0;
-		const linkInfo = (this.runtime as any)._linkInfo;
-		linkInfo.push({ aplName: name, filePath, startLine });
+		const rows = [...this.session.linkInfo, { aplName: name, filePath, startLine }];
+		seedLinkInfo(this.session, rows);
 		return { filePath, startLine };
 	}
 
@@ -174,9 +175,8 @@ export class DyalogBackend implements TestBackend {
 
 		const runtime = new AplRuntime(fileAccessor);
 		(runtime as any)._session = session;
-		// Set _folder so getLinkInfo() knows where to write link.json
+		// Set _folder so loadLinkInfo() knows where to write link.json
 		(runtime as any)._folder = tempDir;
-		(runtime as any)._link = path.join(tempDir, '.vscode', 'link.json');
 		session.setDebugHandler((command: string, args: any) => {
 			(runtime as any).handleMessage([command, args]);
 		});
@@ -236,9 +236,9 @@ export class DyalogBackend implements TestBackend {
 			await this._exec(`2 ⎕FIX 'file://${fixPath}'`);
 		}
 
-		await (this.runtime as any).getLinkInfo();
-		const info = (this.runtime as any)._linkInfo.find(
-			(r: any) => r.aplName === name || r.aplName === `#.${name}`
+		await this.session.refreshLinkInfo(this._tempDir);
+		const info = this.session.linkInfo.find(
+			r => r.aplName === name || r.aplName === `#.${name}`
 		);
 		return {
 			filePath: info?.filePath || filePath,

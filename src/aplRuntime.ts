@@ -5,7 +5,7 @@
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as Path from 'path';
-import { AplSession } from './aplSession';
+import { AplSession, LinkInfoRow } from './aplSession';
 import { TEMP_DIR } from './editWindowManager';
 import { normPath, PendingRequest, PendingRequests } from './utils';
 import type {
@@ -85,16 +85,6 @@ export class AplRuntime extends EventEmitter {
 
 	// maps from sourceFile to array of APL breakpoints
 	private _breakPoints = new Map<string, IAplBreakpoint[]>();
-	
-	// link info returned from interpreter
-	private _linkInfo: {
-		aplName: string; 
-		filePath: string;
-		startLine: number;
-	}[] = [];
-
-	// maps APL name → file path and file path → APL name
-	private _linkMap: Record<string, string> = {};
 
 	// since we want to send breakpoint events, we will assign an id to every event
 	// so that the frontend can match events with breakpoints.
@@ -105,7 +95,6 @@ export class AplRuntime extends EventEmitter {
 	private _noDebug = false;
 	private _trace = false;
 	private _folder = '.';
-	private _link = '';
 
 	private _session?: AplSession;
 	private _autoDebug = false;  // True when debug session was auto-started on error
@@ -138,7 +127,6 @@ export class AplRuntime extends EventEmitter {
 		this._noDebug = noDebug;
 		this._sourceFile = program;
 		this._folder = folder;
-		this._link = `${this._folder}/.vscode/link.json`;
 		this._trace = stopOnEntry;
 
 		// Register as the debug message handler
@@ -146,14 +134,16 @@ export class AplRuntime extends EventEmitter {
 			this.handleMessage([command, args] as RideMessage);
 		});
 
-		// Get link info from existing session
-		await this.getLinkInfo();
+		// Refresh link info — REPL activity since the last load may have ⎕FIX'd
+		// or re-Linked things. Matches the pre-consolidation behaviour where
+		// the runtime always re-fetched on attach.
+		await session.refreshLinkInfo(this._folder);
 
 		// Debugging a file requires Link — without it there's no mapping
 		// between file lines and APL functions for breakpoints and source
 		// navigation.  REPL tracing (Ctrl+Enter) works without Link since
 		// the function just needs to exist in the workspace.
-		if (this._sourceFile && this._linkInfo.length === 0) {
+		if (this._sourceFile && session.linkInfo.length === 0) {
 			this.detachFromSession();
 			throw new Error('Link is not active. Please link your workspace to debug files.');
 		}
@@ -203,7 +193,6 @@ export class AplRuntime extends EventEmitter {
 		this._noDebug = false;
 		this._sourceFile = '';
 		this._folder = folder;
-		this._link = `${this._folder}/.vscode/link.json`;
 		this._trace = false;
 
 		this.log(`attachToSuspendedSession: isSuspended=${session.isSuspended}, pendingCount=${session.pendingDebugMessageCount}`);
@@ -221,9 +210,10 @@ export class AplRuntime extends EventEmitter {
 			return;
 		}
 
-		// Get link info from existing session (interpreter can execute while suspended)
-		this.log('attachToSuspendedSession: getting link info...');
-		await this.getLinkInfo();
+		// Get link info from existing session (interpreter can execute while suspended).
+		// Refresh: the suspended interpreter may have ⎕FIX'd things since the last load.
+		this.log('attachToSuspendedSession: refreshing link info...');
+		await session.refreshLinkInfo(this._folder);
 
 		this.log(`attachToSuspendedSession: replaying ${session.pendingDebugMessageCount} buffered messages`);
 		// Replay the buffered messages (OpenWindow, HadError, SetHighlightLine)
@@ -232,44 +222,6 @@ export class AplRuntime extends EventEmitter {
 		this.log(`attachToSuspendedSession: done, _winId=${this._winId}`);
 	}
 
-	private async getLinkInfo() {
-		const linkDir = Path.dirname(this._link);
-		if (!fs.existsSync(linkDir)) {
-			fs.mkdirSync(linkDir, { recursive: true });
-		}
-		await this._fileAccessor.deleteFile(this._link).catch(this.err);
-		// Only write link.json if Link is active (5177⌶ returns non-empty).
-		// The echo arrives on receipt, not on completion — send a no-op
-		// afterward so its echo confirms the file write is done.
-		// Guard with ⎕SE.Link.Links (actual link state) — 5177⌶ can return
-		// stale entries after unlinking.  6:: catches VALUE ERROR if Link
-		// API is unavailable.
-		await this.exec(0, `{6::⍬ ⋄ 0=≢⎕SE.Link.Links:⍬ ⋄ r←5177⌶⍬ ⋄ 0=≢r:⍬ ⋄ (⊂⎕JSON ⍕¨¨r)⎕NPUT '${this._link}' 1}⍬`, 1);
-		await this.exec(0, '⍬', 1);
-		if (!fs.existsSync(this._link)) {
-			// No Link active — leave linkInfo empty
-			return;
-		}
-		try {
-			const data = await this._fileAccessor.readFile(this._link);
-			const json = new TextDecoder().decode(data);
-			const map: Record<string, string> = {};
-			this._linkInfo = JSON.parse(json)
-				.filter((row: string[]) => row[1] !== '⎕SE')  // exclude Dyalog internals
-				.map((row: string[]) => {
-				const aplName = row[0][0] === '#' ? row[0] : `${row[1]}.${row[0]}`;
-				const filePath = Path.resolve(row[3]);
-				const startLine = +row[4];
-				map[aplName] = filePath;
-				map[filePath] = aplName;
-				return { aplName, filePath, startLine };
-			});
-			this._linkMap = map;
-		} catch (e) {
-			this.err(e as Error);
-		}
-	}
-	
 	private async initialiseBreakpoints() {
 		// Set breakpoints sequentially — exec can only track one echo at a time
 		for (const [filePath, bps] of this._breakPoints) {
@@ -570,7 +522,7 @@ export class AplRuntime extends EventEmitter {
 		this.log('getSIStack');
 		const frames: IStackFrame[] = x.stack.map((s, i) => {
 			const { name, lineOffset } = parseStackDescription(s.description);
-			const file = this._linkMap[name] || this._windowFile(name) || '';
+			const file = this._session?.linkedFileFor(name) || this._windowFile(name) || '';
 			return {
 				index: i,
 				name,
@@ -750,8 +702,8 @@ export class AplRuntime extends EventEmitter {
 				} else {
 					// Multi-function file (.apln, .aplc) - extract function between ∇ boundaries
 					let startIdx = -1;
-					// Try _linkInfo first for accurate start line
-					const linkRow = this._linkInfo.find(row =>
+					// Try linkInfo first for accurate start line
+					const linkRow = this._session?.linkInfo.find(row =>
 						normPath(row.filePath) === normalizedPath &&
 						(row.aplName.endsWith(`.${win.name}`) || row.aplName === win.name)
 					);
@@ -881,15 +833,16 @@ export class AplRuntime extends EventEmitter {
 
 	private async setBreakPointOnFile(bps: IAplBreakpoint[], filePath: string): Promise<void> {
 		const fnbp = {};
-		if (this._linkInfo.length === 0) {
+		const linkInfo = this._session?.linkInfo ?? [];
+		if (linkInfo.length === 0) {
 			return;
 		}
 		const normalizedPath = normPath(filePath);
 		const matched: IAplBreakpoint[] = [];
 		bps.forEach((bp) => {
 			// Find the closest preceding function (largest startLine <= bp.line)
-			let row: typeof this._linkInfo[0] | undefined;
-			for (const r of this._linkInfo) {
+			let row: LinkInfoRow | undefined;
+			for (const r of linkInfo) {
 				if (normPath(r.filePath) === normalizedPath && r.startLine <= bp.line) {
 					if (!row || r.startLine > row.startLine) { row = r; }
 				}
@@ -934,7 +887,7 @@ export class AplRuntime extends EventEmitter {
 		const filePath = normPath(path);
 		this._breakPoints.delete(filePath);
 		// Clear stops on ALL functions in this file, not just one
-		for (const row of this._linkInfo) {
+		for (const row of this._session?.linkInfo ?? []) {
 			if (normPath(row.filePath) === filePath) {
 				await this.exec(0, `{}⍬ ⎕STOP '${row.aplName}'`, 1);
 			}
