@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as Net from 'net';
+import * as os from 'os';
 import * as Path from 'path';
 import * as vscode from 'vscode';
 import { findDyalogExe } from './findDyalog';
@@ -47,11 +48,19 @@ export class AplSession extends EventEmitter {
 	private _linkInfoLoading?: Promise<void>;
 	private _linkInfoLoaded = false;
 
+	// Per-session subdir name under <tmpdir>/vscode-apl/ — supplied by the
+	// owner (ReplTab) so link.json lives alongside the REPL's tracer +
+	// edit-window temp files, and concurrent sessions don't collide.
+	// Fallback counter for callers (tests) that don't supply one.
+	private static _fallbackId = 0;
+	private readonly _replId: string;
+
 	// One-shot echo waiter for awaitable Execute calls (loadLinkInfo).
 	private _pendingEcho?: { text: string; resolve: () => void };
 
-	public constructor() {
+	public constructor(replId?: string) {
 		super();
+		this._replId = replId ?? `session-${++AplSession._fallbackId}`;
 	}
 
 	public get state(): ConnectionState {
@@ -361,9 +370,12 @@ export class AplSession extends EventEmitter {
 		return this.loadLinkInfo(folder);
 	}
 
-	private async _doLoadLinkInfo(folder: string): Promise<void> {
-		const linkPath = Path.join(folder, '.vscode', 'link.json');
-		const linkDir = Path.dirname(linkPath);
+	private async _doLoadLinkInfo(_folder: string): Promise<void> {
+		// Per-session scratch file under the same per-REPL temp dir that
+		// tracer + edit-window files use.  Concurrent sessions in the same
+		// workspace can't race on a shared link.json this way.
+		const linkDir = Path.join(os.tmpdir(), 'vscode-apl', this._replId);
+		const linkPath = Path.join(linkDir, 'link.json');
 		try { fs.mkdirSync(linkDir, { recursive: true }); } catch { /* ignore */ }
 		try { fs.unlinkSync(linkPath); } catch { /* ignore */ }
 
