@@ -67,6 +67,7 @@
     "vsce": "^2.7.0"
   },
   "main": "./dist/extension.js",
+  "extensionKind": ["workspace"],
   "activationEvents": [
     "onDebugResolve:apl",
     "onDebugDynamicConfigurations:apl",

@@ -162,7 +162,7 @@ suite('AplSession — debug handler delegation', () => {
 		await readyPromise;
 
 		// Send messages that would be buffered (debug-specific)
-		server.send('OpenWindow', { token: 1, name: 'test', filename: 'test.aplf', text: ['header'], stop: [], trace: [], monitor: [] });
+		server.send('OpenWindow', { token: 1, name: 'test', filename: 'test.aplf', text: ['header'], debugger: 1, stop: [], trace: [], monitor: [] });
 		server.send('SetHighlightLine', { win: 1, line: 0 });
 
 		await new Promise(resolve => setTimeout(resolve, 100));
@@ -180,7 +180,7 @@ suite('AplSession — debug handler delegation', () => {
 
 		// Buffer some debug messages
 		server.send('HadError', { error: 1001 });
-		server.send('OpenWindow', { token: 1, name: 'test', filename: 'test.aplf', text: ['header'], stop: [], trace: [], monitor: [] });
+		server.send('OpenWindow', { token: 1, name: 'test', filename: 'test.aplf', text: ['header'], debugger: 1, stop: [], trace: [], monitor: [] });
 		server.send('SetHighlightLine', { win: 1, line: 0 });
 
 		await new Promise(resolve => setTimeout(resolve, 100));

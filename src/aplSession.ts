@@ -2,11 +2,18 @@ import { EventEmitter } from 'events';
 import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as Net from 'net';
+import * as os from 'os';
 import * as Path from 'path';
 import * as vscode from 'vscode';
 import { findDyalogExe } from './findDyalog';
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'busy';
+
+export interface LinkInfoRow {
+	aplName: string;
+	filePath: string;
+	startLine: number;
+}
 
 /**
  * Manages a shared APL interpreter session via RIDE protocol.
@@ -32,9 +39,28 @@ export class AplSession extends EventEmitter {
 	// Pending debug messages buffered when no debug handler is attached
 	private _pendingDebugMessages: Array<[string, any]> = [];
 	private _isSuspended = false;
+	private _editWindowTokens = new Set<number>();
 
-	public constructor() {
+	// Cached Link info — bulk-fetched once via 5177⌶, shared by AplRuntime,
+	// ReplBreakpointSync, and editWindowManager. Cleared on disconnect.
+	private _linkInfo: LinkInfoRow[] = [];
+	private _linkMap = new Map<string, string>();
+	private _linkInfoLoading?: Promise<void>;
+	private _linkInfoLoaded = false;
+
+	// Per-session subdir name under <tmpdir>/vscode-apl/ — supplied by the
+	// owner (ReplTab) so link.json lives alongside the REPL's tracer +
+	// edit-window temp files, and concurrent sessions don't collide.
+	// Fallback counter for callers (tests) that don't supply one.
+	private static _fallbackId = 0;
+	private readonly _replId: string;
+
+	// One-shot echo waiter for awaitable Execute calls (loadLinkInfo).
+	private _pendingEcho?: { text: string; resolve: () => void };
+
+	public constructor(replId?: string) {
 		super();
+		this._replId = replId ?? `session-${++AplSession._fallbackId}`;
 	}
 
 	public get state(): ConnectionState {
@@ -269,6 +295,12 @@ export class AplSession extends EventEmitter {
 		}
 		this._pendingDebugMessages = [];
 		this._isSuspended = false;
+		this._editWindowTokens.clear();
+		this._linkInfo = [];
+		this._linkMap.clear();
+		this._linkInfoLoaded = false;
+		this._linkInfoLoading = undefined;
+		this._pendingEcho = undefined;
 		this.setState('disconnected');
 	}
 
@@ -291,6 +323,113 @@ export class AplSession extends EventEmitter {
 		}
 		const text = code.endsWith('\n') ? code : `${code}\n`;
 		this.sendMessage('Execute', { trace, text });
+	}
+
+	/** Snapshot of cached Link rows (empty if Link is inactive or load hasn't run). */
+	public get linkInfo(): readonly LinkInfoRow[] {
+		return this._linkInfo;
+	}
+
+	/** Sync map lookup. Empty until loadLinkInfo completes. */
+	public linkedFileFor(name: string): string | undefined {
+		return this._linkMap.get(name);
+	}
+
+	/**
+	 * Look up the file backing a linked APL name. Async to keep the API stable
+	 * while a load may still be in flight (callers attach immediately after the
+	 * session emits 'ready', before loadLinkInfo's promise has settled).
+	 */
+	public async getLinkedFile(name: string): Promise<string | undefined> {
+		if (this._linkInfoLoading) { await this._linkInfoLoading; }
+		return this._linkMap.get(name);
+	}
+
+	/**
+	 * Bulk-fetch the interpreter's Link table via 5177⌶ and cache it.
+	 * Idempotent: returns immediately if already loaded; coalesces concurrent
+	 * callers onto a single in-flight promise. Silently no-ops without a
+	 * folder (debug-only sessions, no workspace) or when Link is unavailable.
+	 */
+	public async loadLinkInfo(folder: string): Promise<void> {
+		if (this._linkInfoLoaded) { return; }
+		if (this._linkInfoLoading) { return this._linkInfoLoading; }
+		if (!folder || !this.isConnected) { return; }
+
+		this._linkInfoLoading = this._doLoadLinkInfo(folder).finally(() => {
+			this._linkInfoLoading = undefined;
+		});
+		return this._linkInfoLoading;
+	}
+
+	/** Drop cached Link info and re-fetch. Used when Link state may have changed. */
+	public async refreshLinkInfo(folder: string): Promise<void> {
+		this._linkInfoLoaded = false;
+		this._linkInfo = [];
+		this._linkMap.clear();
+		return this.loadLinkInfo(folder);
+	}
+
+	private async _doLoadLinkInfo(_folder: string): Promise<void> {
+		// Per-session scratch file under the same per-REPL temp dir that
+		// tracer + edit-window files use.  Concurrent sessions in the same
+		// workspace can't race on a shared link.json this way.
+		const linkDir = Path.join(os.tmpdir(), 'vscode-apl', this._replId);
+		const linkPath = Path.join(linkDir, 'link.json');
+		try { fs.mkdirSync(linkDir, { recursive: true }); } catch { /* ignore */ }
+		try { fs.unlinkSync(linkPath); } catch { /* ignore */ }
+
+		const aplPath = linkPath.replace(/\\/g, '/').replace(/'/g, "''");
+		// Guard with ⎕SE.Link.Links — 5177⌶ can return stale entries after
+		// unlinking. 6:: catches VALUE ERROR if the Link API is unavailable.
+		// Echo arrives on receipt, not completion — a no-op afterward gives
+		// a second echo that confirms the file write is done.
+		await this._executeAndAwaitEcho(
+			`{6::⍬ ⋄ 0=≢⎕SE.Link.Links:⍬ ⋄ r←5177⌶⍬ ⋄ 0=≢r:⍬ ⋄ (⊂⎕JSON ⍕¨¨r)⎕NPUT '${aplPath}' 1}⍬`
+		);
+		await this._executeAndAwaitEcho('⍬');
+
+		if (!fs.existsSync(linkPath)) {
+			this._linkInfoLoaded = true;
+			return;
+		}
+		try {
+			const json = fs.readFileSync(linkPath, 'utf-8');
+			const rows: LinkInfoRow[] = JSON.parse(json)
+				.filter((row: string[]) => row[1] !== '⎕SE')
+				.map((row: string[]) => {
+					const aplName = row[0][0] === '#' ? row[0] : `${row[1]}.${row[0]}`;
+					const filePath = Path.resolve(row[3]);
+					const startLine = +row[4];
+					return { aplName, filePath, startLine };
+				});
+			this._linkInfo = rows;
+			this._linkMap.clear();
+			for (const r of rows) {
+				this._linkMap.set(r.aplName, r.filePath);
+				this._linkMap.set(r.filePath, r.aplName);
+			}
+		} catch (e) {
+			this.log(`Failed to parse link info: ${(e as Error).message}`);
+		}
+		this._linkInfoLoaded = true;
+	}
+
+	private _executeAndAwaitEcho(expression: string, timeoutMs = 5000): Promise<void> {
+		const text = expression.endsWith('\n') ? expression : `${expression}\n`;
+		return new Promise<void>((resolve) => {
+			let done = false;
+			const finish = () => {
+				if (done) { return; }
+				done = true;
+				if (this._pendingEcho?.text === text) { this._pendingEcho = undefined; }
+				clearTimeout(timer);
+				resolve();
+			};
+			this._pendingEcho = { text, resolve: finish };
+			const timer = setTimeout(finish, timeoutMs);
+			this.sendMessage('Execute', { trace: 0, text });
+		});
 	}
 
 	/**
@@ -440,12 +579,18 @@ export class AplSession extends EventEmitter {
 				this.emit('output', output, 'result');
 				break;
 
-			case 'EchoInput':
-				// Skip if debug handler is attached (it will handle echo)
+			case 'EchoInput': {
+				// Wake any one-shot echo waiter (loadLinkInfo) — runs alongside
+				// debug-handler forwarding so awaitable Executes work in any state.
+				const pending = this._pendingEcho;
+				if (pending && pending.text === args.input) {
+					pending.resolve();
+				}
 				if (!this._debugHandler) {
 					this.emit('echo', args.input);
 				}
 				break;
+			}
 
 			case 'HadError':
 				if (!this._debugHandler) {
@@ -454,10 +599,33 @@ export class AplSession extends EventEmitter {
 				break;
 
 			case 'OpenWindow':
+				if (!this._debugHandler) {
+					if (args.debugger) {
+						this._pendingDebugMessages.push([command, args]);
+					} else {
+						this._editWindowTokens.add(args.token);
+						this.emit('editWindow', args);
+					}
+				}
+				break;
+
 			case 'UpdateWindow':
+				if (!this._debugHandler) {
+					if (this._editWindowTokens.has(args.token)) {
+						this.emit('updateEditWindow', args);
+					} else {
+						this._pendingDebugMessages.push([command, args]);
+					}
+				}
+				break;
+
 			case 'GotoWindow':
 				if (!this._debugHandler) {
-					this._pendingDebugMessages.push([command, args]);
+					if (this._editWindowTokens.has(args.win)) {
+						this.emit('gotoEditWindow', args);
+					} else {
+						this._pendingDebugMessages.push([command, args]);
+					}
 				}
 				break;
 
@@ -471,10 +639,32 @@ export class AplSession extends EventEmitter {
 
 			case 'CloseWindow':
 				if (!this._debugHandler) {
-					if (this._pendingDebugMessages.length > 0) {
-						this._pendingDebugMessages.push([command, args]);
+					if (this._editWindowTokens.has(args.win)) {
+						this._editWindowTokens.delete(args.win);
+						this.emit('closeEditWindow', args);
+					} else {
+						if (this._pendingDebugMessages.length > 0) {
+							this._pendingDebugMessages.push([command, args]);
+						}
+						this._isSuspended = false;
 					}
-					this._isSuspended = false;
+				}
+				break;
+
+			case 'ReplySaveChanges':
+				if (this._editWindowTokens.has(args.win)) {
+					this.emit('replySaveChanges', args);
+				}
+				break;
+
+			case 'OptionsDialog':
+				// Dyalog raises this for errors like a SaveChanges parse
+				// failure ("can't fix").  If we never reply, the interpreter
+				// blocks waiting for our index.  In debug mode aplRuntime's
+				// own handler runs first; in REPL mode we surface it as a
+				// VS Code modal and route the user's choice back.
+				if (!this._debugHandler) {
+					this._handleOptionsDialog(args);
 				}
 				break;
 
@@ -505,6 +695,32 @@ export class AplSession extends EventEmitter {
 				this.emit('end');
 				break;
 		}
+	}
+
+	/**
+	 * Surface an OptionsDialog (e.g. Dyalog's "can't fix" save error) as a
+	 * VS Code modal and route the user's choice back via ReplyOptionsDialog.
+	 * Crucial: Dyalog blocks until we reply, so dismissing without an
+	 * answer would deadlock the interpreter.  We treat Esc as the last
+	 * option (typically Cancel/No).
+	 */
+	private async _handleOptionsDialog(args: any): Promise<void> {
+		const options: string[] = Array.isArray(args.options) ? args.options : [];
+		const message: string = args.text || args.title || 'Dyalog dialog';
+		let index = options.length - 1;
+		if (options.length > 0) {
+			const choice = await vscode.window.showWarningMessage(
+				message, { modal: true }, ...options,
+			);
+			if (choice !== undefined) {
+				const found = options.indexOf(choice);
+				if (found >= 0) { index = found; }
+			}
+		} else {
+			vscode.window.showWarningMessage(message);
+			index = 0;
+		}
+		this.sendMessage('ReplyOptionsDialog', { token: args.token, index });
 	}
 
 	/**

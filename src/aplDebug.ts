@@ -101,6 +101,12 @@ export class AplDebugSession extends LoggingDebugSession {
 		this._runtime.on('closeWindow', (opt: { filename: string }) => {
 			this.sendEvent(new ContinuedEvent(AplDebugSession.threadID));
 		});
+		this._runtime.on('closeTempTab', (opt: { filename: string }) => {
+			this.sendEvent(new Event('closeTempTab', opt));
+		});
+		this._runtime.on('openTempTab', (opt: { filename: string; token: number; stops: number[] }) => {
+			this.sendEvent(new Event('openTempTab', opt));
+		});
 		this._runtime.on('openWindow', (opt: OpenWindowMessage) => {
 			vscode.window.showTextDocument(vscode.Uri.file(opt.filename));
 		});
@@ -239,12 +245,21 @@ export class AplDebugSession extends LoggingDebugSession {
 			this.sendResponse(response);
 			return;
 		}
-		if (args.replSuspended) {
-			// Attach to already-suspended session (auto-debug on error)
-			await this._runtime.attachToSuspendedSession(session, args.cwd);
-		} else {
-			// Attach to existing REPL session
-			await this._runtime.attachToSession(session, args.program, args.cwd, !!args.stopOnEntry, !!args.noDebug);
+		const replId: string = args.replId || manager.activeReplId || 'default';
+		try {
+			if (args.replSuspended) {
+				// Attach to already-suspended session (auto-debug on error)
+				await this._runtime.attachToSuspendedSession(session, replId, args.cwd);
+			} else {
+				// Attach to existing REPL session
+				await this._runtime.attachToSession(session, replId, args.program, args.cwd, !!args.stopOnEntry, !!args.noDebug);
+			}
+		} catch (e: any) {
+			vscode.window.showErrorMessage(e.message);
+			response.success = false;
+			response.message = e.message;
+			this.sendResponse(response);
+			return;
 		}
 
 		// If traceExpression is provided (from REPL Ctrl+Enter), execute it with tracing

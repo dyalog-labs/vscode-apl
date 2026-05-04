@@ -69,7 +69,7 @@ export class ReplManager implements vscode.Disposable {
 		const replId = `repl-${num}-${Date.now()}`;
 		const label = `Session ${num}`;
 
-		const session = new AplSession();
+		const session = new AplSession(replId);
 		const tab = new ReplTab(replId, label, session, this);
 
 		this._tabs.set(replId, tab);
@@ -190,6 +190,21 @@ export class ReplManager implements vscode.Disposable {
 	/** Interrupt the active tab's session. */
 	public interruptActiveTab(): void {
 		this.activeTab?.interrupt();
+	}
+
+	/** Open a definition in the active tab's edit window manager. */
+	public editDefinition(name: string): void {
+		this.activeTab?.editWindowManager.editDefinition(name);
+	}
+
+	/** Register a temp file backing a debug tracer window. */
+	public openTempTab(replId: string, filename: string, token: number, stops: number[]): void {
+		this.getTab(replId)?.editWindowManager.openTempTab(filename, token, stops);
+	}
+
+	/** Close a temp file tab left over from a debug tracer window. */
+	public closeTempTab(replId: string, filename: string): void {
+		this.getTab(replId)?.editWindowManager.closeTempTab(filename);
 	}
 
 	public dispose(): void {

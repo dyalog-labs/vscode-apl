@@ -1,14 +1,6 @@
 import * as vscode from 'vscode';
-import * as fs from 'fs';
-import * as Path from 'path';
-import { AplSession } from './aplSession';
+import { AplSession, LinkInfoRow } from './aplSession';
 import { normPath } from './utils';
-
-interface LinkInfoRow {
-	aplName: string;
-	filePath: string;
-	startLine: number;
-}
 
 /**
  * Syncs VS Code breakpoints to the Dyalog interpreter when a REPL
@@ -21,10 +13,7 @@ interface LinkInfoRow {
 export class ReplBreakpointSync implements vscode.Disposable {
 
 	private _session: AplSession | undefined;
-	private _linkInfo: LinkInfoRow[] = [];
-	private _linkMap: Record<string, string> = {};
 	private _debugSessionActive = false;
-	private _linkInfoLoaded = false;
 	private _folder = '';
 	private _disposables: vscode.Disposable[] = [];
 
@@ -59,25 +48,21 @@ export class ReplBreakpointSync implements vscode.Disposable {
 		}
 		this._session = session;
 		this._folder = folder;
-		this._linkInfoLoaded = false;
 
-		await this._loadLinkInfo();
+		await session.loadLinkInfo(folder);
 
 		if (!this._debugSessionActive) {
-			await this._syncAllBreakpoints();
+			this._syncAllBreakpoints();
 		}
 	}
 
 	public detachFromSession(): void {
 		this._session = undefined;
-		this._linkInfo = [];
-		this._linkMap = {};
-		this._linkInfoLoaded = false;
 	}
 
 	public async refreshLinkInfo(): Promise<void> {
 		if (this._session?.isConnected) {
-			await this._loadLinkInfo();
+			await this._session.refreshLinkInfo(this._folder);
 			if (!this._debugSessionActive) {
 				this._syncAllBreakpoints();
 			}
@@ -91,97 +76,12 @@ export class ReplBreakpointSync implements vscode.Disposable {
 
 	// --- Private ---
 
-	private async _loadLinkInfo(): Promise<void> {
-		if (!this._session?.isConnected || !this._folder) {
-			return;
-		}
-
-		const linkPath = `${this._folder}/.vscode/link.json`;
-		const linkDir = Path.dirname(linkPath);
-		if (!fs.existsSync(linkDir)) {
-			fs.mkdirSync(linkDir, { recursive: true });
-		}
-
-		// Delete stale file
-		try { fs.unlinkSync(linkPath); } catch { /* ignore */ }
-
-		// Execute in interpreter and wait for the echo
-		await this._execAndWait(`{}(⊂⎕JSON ⍕¨¨5177⌶⍬)⎕NPUT '${linkPath}' 1`);
-
-		// Wait for file to appear (up to 5 seconds)
-		const exists = await this._waitForFile(linkPath, 5000);
-		if (!exists) {
-			return;
-		}
-
-		try {
-			const raw = fs.readFileSync(linkPath, 'utf-8');
-			const map: Record<string, string> = {};
-			this._linkInfo = JSON.parse(raw).map((row: string[]) => {
-				const aplName = row[0][0] === '#' ? row[0] : `${row[1]}.${row[0]}`;
-				const filePath = Path.resolve(row[3]);
-				const startLine = +row[4];
-				map[aplName] = filePath;
-				map[filePath] = aplName;
-				return { aplName, filePath, startLine };
-			});
-			this._linkMap = map;
-			this._linkInfoLoaded = true;
-		} catch (e) {
-			console.error('[ReplBreakpointSync] Failed to parse link info:', e);
-		}
-	}
-
-	private _waitForFile(filePath: string, timeout: number): Promise<boolean> {
-		return new Promise(resolve => {
-			const start = Date.now();
-			const interval = Math.min(timeout, 100);
-			const check = () => {
-				if (fs.existsSync(filePath)) {
-					resolve(true);
-				} else if (Date.now() - start > timeout) {
-					resolve(false);
-				} else {
-					setTimeout(check, interval);
-				}
-			};
-			check();
-		});
-	}
-
-	private _execAndWait(expression: string): Promise<void> {
-		return new Promise<void>(resolve => {
-			if (!this._session?.isConnected) {
-				resolve();
-				return;
-			}
-
-			const text = expression.endsWith('\n') ? expression : `${expression}\n`;
-			const handler = (input: string) => {
-				if (input === text) {
-					this._session?.removeListener('echo', handler);
-					clearTimeout(timer);
-					resolve();
-				}
-			};
-			this._session.on('echo', handler);
-
-			const timer = setTimeout(() => {
-				this._session?.removeListener('echo', handler);
-				resolve();
-			}, 5000);
-
-			this._session.execute(expression);
-		});
-	}
-
 	private async _onBreakpointsChanged(e: vscode.BreakpointsChangeEvent): Promise<void> {
 		if (!this._session?.isConnected || this._debugSessionActive) { return; }
 
-		if (!this._linkInfoLoaded) {
-			await this._loadLinkInfo();
-			if (!this._linkInfoLoaded) { return; }
-		}
+		// Ensure linkInfo is loaded — usually already done on session 'ready'.
+		await this._session.loadLinkInfo(this._folder);
+		if (this._session.linkInfo.length === 0) { return; }
 
 		const affectedFiles = new Set<string>();
 		for (const bp of [...e.added, ...e.removed, ...e.changed]) {
@@ -198,6 +98,7 @@ export class ReplBreakpointSync implements vscode.Disposable {
 	private _syncBreakpointsForFile(filePath: string): void {
 		if (!this._session?.isConnected) { return; }
 
+		const linkInfo = this._session.linkInfo;
 		const normalizedPath = normPath(filePath);
 
 		// Get all enabled VS Code breakpoints for this file
@@ -213,7 +114,7 @@ export class ReplBreakpointSync implements vscode.Disposable {
 			const line = bp.location.range.start.line; // 0-based
 			// Find the closest preceding function (largest startLine <= line)
 			let row: LinkInfoRow | undefined;
-			for (const r of this._linkInfo) {
+			for (const r of linkInfo) {
 				if (normPath(r.filePath) === normalizedPath && r.startLine <= line) {
 					if (!row || r.startLine > row.startLine) { row = r; }
 				}
@@ -227,7 +128,7 @@ export class ReplBreakpointSync implements vscode.Disposable {
 
 		// Find all APL functions mapped to this file
 		const allFunctions = new Set(
-			this._linkInfo
+			linkInfo
 				.filter(r => normPath(r.filePath) === normalizedPath)
 				.map(r => r.aplName)
 		);
@@ -248,11 +149,13 @@ export class ReplBreakpointSync implements vscode.Disposable {
 	}
 
 	private _syncAllBreakpoints(): void {
-		if (!this._session?.isConnected || !this._linkInfoLoaded) { return; }
+		if (!this._session?.isConnected) { return; }
+		const linkInfo = this._session.linkInfo;
+		if (linkInfo.length === 0) { return; }
 
 		// Include all linked files so stale ⎕STOP from debug sessions get cleared
 		const allFiles = new Set(
-			this._linkInfo.map(r => normPath(r.filePath))
+			linkInfo.map(r => normPath(r.filePath))
 		);
 		for (const bp of vscode.debug.breakpoints) {
 			if (bp instanceof vscode.SourceBreakpoint) {

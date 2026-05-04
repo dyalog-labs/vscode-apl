@@ -4,6 +4,7 @@ import { AplRuntime, FileAccessor } from '../../aplRuntime';
 import { AplSession } from '../../aplSession';
 import { AplDebugSession } from '../../aplDebug';
 import { MockRideServer } from '../helpers/mockRideServer';
+import { seedLinkInfo } from '../helpers/sessionTestUtils';
 import { normPath } from '../../utils';
 
 const mockFileAccessor: FileAccessor = {
@@ -59,9 +60,9 @@ suite('AplRuntime — breakpoint handling', () => {
 	teardown(() => teardownTestRuntime(session, server));
 
 	test('breakpoint after header line is matched and verified', async () => {
-		(runtime as any)._linkInfo = [
+		seedLinkInfo(session, [
 			{ aplName: 'MyFunc', filePath: '/test/file.aplf', startLine: 5 }
-		];
+		]);
 
 		const bp = await runtime.setBreakPoint('/test/file.aplf', 6);
 
@@ -71,9 +72,9 @@ suite('AplRuntime — breakpoint handling', () => {
 	});
 
 	test('breakpoint on function header line is matched', async () => {
-		(runtime as any)._linkInfo = [
+		seedLinkInfo(session, [
 			{ aplName: 'MyFunc', filePath: '/test/file.aplf', startLine: 5 }
-		];
+		]);
 
 		const bp = await runtime.setBreakPoint('/test/file.aplf', 5);
 		assert.strictEqual(bp.verified, true,
@@ -81,9 +82,9 @@ suite('AplRuntime — breakpoint handling', () => {
 	});
 
 	test('breakpoint line offset is calculated from startLine', async () => {
-		(runtime as any)._linkInfo = [
+		seedLinkInfo(session, [
 			{ aplName: 'MyFunc', filePath: '/test/file.aplf', startLine: 10 }
-		];
+		]);
 
 		await runtime.setBreakPoint('/test/file.aplf', 13);
 
@@ -94,9 +95,9 @@ suite('AplRuntime — breakpoint handling', () => {
 	});
 
 	test('multiple breakpoints in same function are batched into one ⎕STOP', async () => {
-		(runtime as any)._linkInfo = [
+		seedLinkInfo(session, [
 			{ aplName: 'MyFunc', filePath: '/test/file.aplf', startLine: 0 }
-		];
+		]);
 
 		await runtime.setBreakPoint('/test/file.aplf', 2);
 		// Second setBreakPoint re-sends for all bps in the file
@@ -110,10 +111,10 @@ suite('AplRuntime — breakpoint handling', () => {
 	});
 
 	test('breakpoints across multiple functions in one file', async () => {
-		(runtime as any)._linkInfo = [
+		seedLinkInfo(session, [
 			{ aplName: 'Fn1', filePath: '/test/file.aplf', startLine: 0 },
 			{ aplName: 'Fn2', filePath: '/test/file.aplf', startLine: 20 },
-		];
+		]);
 
 		await runtime.setBreakPoint('/test/file.aplf', 5);
 		await runtime.setBreakPoint('/test/file.aplf', 25);
@@ -126,19 +127,19 @@ suite('AplRuntime — breakpoint handling', () => {
 	});
 
 	test('breakpoint in unlinked file stays unverified', async () => {
-		(runtime as any)._linkInfo = [
+		seedLinkInfo(session, [
 			{ aplName: 'Fn1', filePath: '/other/file.aplf', startLine: 0 }
-		];
+		]);
 
 		const bp = await runtime.setBreakPoint('/test/file.aplf', 5);
 		assert.strictEqual(bp.verified, false, 'breakpoint in unlinked file should be unverified');
 	});
 
 	test('clearBreakpoints sends clear commands for all functions in file', async () => {
-		(runtime as any)._linkInfo = [
+		seedLinkInfo(session, [
 			{ aplName: 'Fn1', filePath: '/test/file.aplf', startLine: 0 },
 			{ aplName: 'Fn2', filePath: '/test/file.aplf', startLine: 20 },
-		];
+		]);
 
 		await runtime.setBreakPoint('/test/file.aplf', 5);
 		await runtime.setBreakPoint('/test/file.aplf', 25);
@@ -154,9 +155,9 @@ suite('AplRuntime — breakpoint handling', () => {
 	});
 
 	test('clearBreakpoints is awaitable', async () => {
-		(runtime as any)._linkInfo = [
+		seedLinkInfo(session, [
 			{ aplName: 'Fn1', filePath: '/test/file.aplf', startLine: 0 },
-		];
+		]);
 		const result: any = runtime.clearBreakpoints('/test/file.aplf');
 		assert.ok(result && typeof result.then === 'function',
 			'clearBreakpoints should return a thenable');
@@ -164,15 +165,15 @@ suite('AplRuntime — breakpoint handling', () => {
 	});
 
 	test('setBreakPoint with empty linkInfo stays unverified', async () => {
-		(runtime as any)._linkInfo = [];
+		seedLinkInfo(session, []);
 		const bp = await runtime.setBreakPoint('/test/file.aplf', 5);
 		assert.strictEqual(bp.verified, false);
 	});
 
 	test('setBreakPoint deduplicates by line', async () => {
-		(runtime as any)._linkInfo = [
+		seedLinkInfo(session, [
 			{ aplName: 'Fn1', filePath: '/test/file.aplf', startLine: 0 }
-		];
+		]);
 		const bp1 = await runtime.setBreakPoint('/test/file.aplf', 5);
 		const bp2 = await runtime.setBreakPoint('/test/file.aplf', 5);
 		assert.strictEqual(bp1.id, bp2.id, 'same line should return same breakpoint');
@@ -551,7 +552,9 @@ suite('AplRuntime — stack frames', () => {
 	});
 
 	test('getSIStack uses linkMap for file resolution when filename is empty', async () => {
-		(runtime as any)._linkMap = { '#.NS.bar': '/src/bar.aplf' };
+		seedLinkInfo(session, [
+			{ aplName: '#.NS.bar', filePath: '/src/bar.aplf', startLine: 0 }
+		]);
 
 		const stack = await runtime.getSIStack();
 
@@ -994,9 +997,9 @@ suite('AplDebugSession — setBreakpoints uses args.breakpoints', () => {
 		session.setDebugHandler((command: string, args: any) => {
 			(runtime as any).handleMessage([command, args]);
 		});
-		(runtime as any)._linkInfo = [
+		seedLinkInfo(session, [
 			{ aplName: 'MyFunc', filePath: '/test/file.aplf', startLine: 0 }
-		];
+		]);
 	});
 
 	teardown(() => {
