@@ -12,10 +12,22 @@ import type { ReplManager } from './replManager';
  *  - Lines starting with ] are meta-commands handled locally
  *
  * Binds to 127.0.0.1 only. Disabled by default (apl.evalServer.port = 0).
+ *
+ * Requests are processed through a server-wide FIFO queue so that
+ * concurrent connections — and rapid back-to-back requests on a single
+ * connection — don't cross-contaminate outputs.
  */
+
+interface EvalRequest {
+	expr: string;
+	socket: Net.Socket;
+}
+
 export class EvalServer {
 	private _server?: Net.Server;
 	private _manager: ReplManager;
+	private _queue: EvalRequest[] = [];
+	private _busy = false;
 
 	constructor(manager: ReplManager) {
 		this._manager = manager;
@@ -47,22 +59,8 @@ export class EvalServer {
 						continue;
 					}
 
-					const session = this._manager.activeSession;
-					if (!session || !session.isConnected) {
-						socket.write('[No active session]\0');
-						continue;
-					}
-
-					let output = '';
-					const onOutput = (text: string) => { output += text; };
-					const onReady = () => {
-						session.removeListener('output', onOutput);
-						session.removeListener('ready', onReady);
-						socket.write(output + '\0');
-					};
-					session.on('output', onOutput);
-					session.on('ready', onReady);
-					session.execute(expr);
+					this._queue.push({ expr, socket });
+					this.dispatch();
 				}
 			});
 
@@ -84,6 +82,41 @@ export class EvalServer {
 			this._server.close();
 			this._server = undefined;
 			console.log('[EvalServer] Stopped');
+		}
+		for (const req of this._queue) {
+			try { req.socket.destroy(); } catch { /* */ }
+		}
+		this._queue = [];
+		this._busy = false;
+	}
+
+	private dispatch(): void {
+		if (this._busy) { return; }
+		while (this._queue.length > 0) {
+			if (this._queue[0].socket.destroyed) {
+				this._queue.shift();
+				continue;
+			}
+			const req = this._queue.shift()!;
+			const session = this._manager.activeSession;
+			if (!session || !session.isConnected) {
+				try { req.socket.write('[No active session]\0'); } catch { /* */ }
+				continue;
+			}
+			this._busy = true;
+			let output = '';
+			const onOutput = (text: string) => { output += text; };
+			const onReady = () => {
+				session.removeListener('output', onOutput);
+				session.removeListener('ready', onReady);
+				this._busy = false;
+				try { req.socket.write(output + '\0'); } catch { /* */ }
+				this.dispatch();
+			};
+			session.on('output', onOutput);
+			session.on('ready', onReady);
+			session.execute(req.expr);
+			return;
 		}
 	}
 
