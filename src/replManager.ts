@@ -209,15 +209,21 @@ export class ReplManager implements vscode.Disposable {
 		this.getTab(replId)?.editWindowManager.closeTempTab(filename);
 	}
 
-	public startEvalServer(): void {
+	public startEvalServer(tokenDir: string): void {
+		const config = vscode.workspace.getConfiguration('apl');
+		const port = config.get<number>('evalServer.port') || 0;
+		if (port <= 0) { return; }
+
 		if (!this._evalServer) {
-			this._evalServer = new EvalServer(this);
+			this._evalServer = new EvalServer(this, tokenDir);
 		}
-		this._evalServer.start();
+		this._evalServer.start(port).catch((e: Error) => {
+			console.log(`[EvalServer] failed to start: ${e.message}`);
+		});
 	}
 
 	public stopEvalServer(): void {
-		this._evalServer?.stop();
+		this._evalServer?.stop().catch(() => { /* */ });
 	}
 
 	public dispose(): void {

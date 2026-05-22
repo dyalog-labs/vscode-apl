@@ -131,8 +131,8 @@ suite('EvalServer', () => {
 		port = await server.start(0); // 0 → OS-assigned ephemeral port
 	});
 
-	teardown(() => {
-		try { server.stop(); } catch { /* already stopped */ }
+	teardown(async () => {
+		try { await server.stop(); } catch { /* already stopped */ }
 		try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* */ }
 	});
 
@@ -146,16 +146,16 @@ suite('EvalServer', () => {
 			assert.match(token, /^[0-9a-f]{64}$/);
 		});
 
-		test('removes the token file on stop', () => {
+		test('removes the token file on stop', async () => {
 			const tokenPath = path.join(tmpDir, 'eval-token');
 			assert.ok(fs.existsSync(tokenPath), 'token file should exist while server is running');
-			server.stop();
+			await server.stop();
 			assert.ok(!fs.existsSync(tokenPath), 'token file should be removed after stop');
 		});
 
 		test('regenerates the token on each start', async () => {
 			const t1 = readToken(tmpDir);
-			server.stop();
+			await server.stop();
 			port = await server.start(0);
 			const t2 = readToken(tmpDir);
 			assert.notStrictEqual(t1, t2);
@@ -548,7 +548,7 @@ suite('EvalServer', () => {
 		});
 
 		test('stop() refuses further connections', async () => {
-			server.stop();
+			await server.stop();
 			await assert.rejects(connect(port), /ECONNREFUSED|ECONNRESET/);
 		});
 	});

@@ -1,22 +1,31 @@
 import * as Net from 'net';
-import * as vscode from 'vscode';
+import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 import type { ReplManager } from './replManager';
 
 /**
- * A lightweight TCP server that allows external tools (e.g. Claude Code)
- * to execute APL expressions in the active REPL session.
+ * TCP server that lets external tools execute APL in the active REPL session.
  *
  * Protocol:
- *  - Client sends one line of APL terminated by \n
- *  - Server replies with the output followed by a NUL byte (\0)
- *  - Lines starting with ] are meta-commands handled locally
+ *  - First non-empty line of each connection must be `]auth <token>\n`.
+ *    The token is a 64-char hex string written to `<tokenDir>/eval-token`
+ *    on start. Anything else closes the socket before any APL reaches the
+ *    session — this is what protects against local processes and against
+ *    browser drive-by attacks (a browser cannot make the first line of a
+ *    TCP payload be `]auth …`, since the request always starts with an
+ *    HTTP request line or WS handshake).
+ *  - On success the server writes `(ok)\0`. The client may then send APL
+ *    expressions (one per line) or `]`-prefixed meta-commands. Each reply
+ *    is text followed by `\0`.
+ *  - Requests are processed through a server-wide FIFO queue so that
+ *    concurrent connections — and rapid back-to-back requests on a single
+ *    connection — don't cross-contaminate outputs.
  *
- * Binds to 127.0.0.1 only. Disabled by default (apl.evalServer.port = 0).
- *
- * Requests are processed through a server-wide FIFO queue so that
- * concurrent connections — and rapid back-to-back requests on a single
- * connection — don't cross-contaminate outputs.
+ * Bound to 127.0.0.1. Auth is the primary defence; loopback is defence-in-depth.
  */
+
+const TOKEN_FILE = 'eval-token';
 
 interface EvalRequest {
 	expr: string;
@@ -26,68 +35,106 @@ interface EvalRequest {
 export class EvalServer {
 	private _server?: Net.Server;
 	private _manager: ReplManager;
+	private _tokenDir: string;
+	private _token?: string;
 	private _queue: EvalRequest[] = [];
 	private _busy = false;
 
-	constructor(manager: ReplManager) {
+	constructor(manager: ReplManager, tokenDir: string) {
 		this._manager = manager;
+		this._tokenDir = tokenDir;
 	}
 
-	public start(): void {
+	public async start(port: number): Promise<number> {
 		if (this._server) {
-			return;
-		}
-		const config = vscode.workspace.getConfiguration('apl');
-		const port = config.get<number>('evalServer.port') || 0;
-		if (port <= 0) {
-			return;
+			const addr = this._server.address() as Net.AddressInfo;
+			return addr.port;
 		}
 
-		this._server = Net.createServer((socket) => {
-			let buf = '';
+		this._token = crypto.randomBytes(32).toString('hex');
+		fs.mkdirSync(this._tokenDir, { recursive: true });
+		const tokenPath = path.join(this._tokenDir, TOKEN_FILE);
+		try { fs.unlinkSync(tokenPath); } catch { /* may not exist */ }
+		fs.writeFileSync(tokenPath, this._token, { mode: 0o600 });
 
-			socket.on('data', (data) => {
-				buf += data.toString();
-				let nl: number;
-				while ((nl = buf.indexOf('\n')) !== -1) {
-					const expr = buf.slice(0, nl).replace(/\r$/, '');
-					buf = buf.slice(nl + 1);
-					if (!expr) { continue; }
+		return new Promise((resolve, reject) => {
+			const server = Net.createServer((socket) => this.handleConnection(socket));
+			let resolved = false;
 
-					if (expr.startsWith(']')) {
-						socket.write(this.handleMetaCommand(expr) + '\0');
-						continue;
-					}
-
-					this._queue.push({ expr, socket });
-					this.dispatch();
+			server.on('error', (e: Error) => {
+				if (!resolved) {
+					this._server = undefined;
+					reject(e);
+				} else {
+					console.log(`[EvalServer] runtime error: ${e.message}`);
 				}
 			});
 
-			socket.on('error', () => {});
-		});
-
-		this._server.on('error', (e: Error) => {
-			console.log(`[EvalServer] Error: ${e.message}`);
-			this._server = undefined;
-		});
-
-		this._server.listen(port, '127.0.0.1', () => {
-			console.log(`[EvalServer] Listening on 127.0.0.1:${port}`);
+			server.listen(port, '127.0.0.1', () => {
+				const addr = server.address() as Net.AddressInfo;
+				console.log(`[EvalServer] Listening on 127.0.0.1:${addr.port}`);
+				this._server = server;
+				resolved = true;
+				resolve(addr.port);
+			});
 		});
 	}
 
-	public stop(): void {
+	public async stop(): Promise<void> {
 		if (this._server) {
-			this._server.close();
+			const server = this._server;
 			this._server = undefined;
+			await new Promise<void>((resolve) => {
+				server.close(() => resolve());
+			});
 			console.log('[EvalServer] Stopped');
+		}
+		if (this._token !== undefined) {
+			try { fs.unlinkSync(path.join(this._tokenDir, TOKEN_FILE)); } catch { /* */ }
+			this._token = undefined;
 		}
 		for (const req of this._queue) {
 			try { req.socket.destroy(); } catch { /* */ }
 		}
 		this._queue = [];
 		this._busy = false;
+	}
+
+	private handleConnection(socket: Net.Socket): void {
+		let buf = '';
+		let authenticated = false;
+
+		socket.on('data', (data) => {
+			buf += data.toString();
+			let nl: number;
+			while ((nl = buf.indexOf('\n')) !== -1) {
+				const expr = buf.slice(0, nl).replace(/\r$/, '');
+				buf = buf.slice(nl + 1);
+				if (!expr) { continue; }
+
+				if (!authenticated) {
+					if (this._token !== undefined && expr === `]auth ${this._token}`) {
+						authenticated = true;
+						try { socket.write('(ok)\0'); } catch { /* */ }
+					} else {
+						try { socket.end('(auth required)\0'); } catch { /* */ }
+						try { socket.destroy(); } catch { /* */ }
+						return;
+					}
+					continue;
+				}
+
+				if (expr.startsWith(']')) {
+					try { socket.write(this.handleMetaCommand(expr) + '\0'); } catch { /* */ }
+					continue;
+				}
+
+				this._queue.push({ expr, socket });
+				this.dispatch();
+			}
+		});
+
+		socket.on('error', () => { /* swallow — Node defaults to throwing */ });
 	}
 
 	private dispatch(): void {
@@ -140,7 +187,8 @@ export class EvalServer {
 					|| '[No tabs]';
 			}
 			case 'switch': {
-				const id = parts[1];
+				// Join all remaining parts so multi-word labels work, e.g. `]switch My Tab`.
+				const id = parts.slice(1).join(' ');
 				if (!id) { return '[Usage: ]switch <replId>]'; }
 				const tab = this._manager.getTab(id);
 				if (!tab) {
