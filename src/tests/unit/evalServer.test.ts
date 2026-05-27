@@ -25,9 +25,13 @@ class FakeSession extends EventEmitter {
 	/** Per-expression output; falls back to defaultOutput. */
 	public outputs: Record<string, string> = {};
 	public defaultOutput = '';
+	/** When false, execute() records the call but does not emit output/ready —
+	 *  lets tests simulate an in-flight request that never completes. */
+	public autoReady = true;
 
 	public execute(expr: string): void {
 		this.executed.push(expr);
+		if (!this.autoReady) { return; }
 		const output = expr in this.outputs ? this.outputs[expr] : this.defaultOutput;
 		setImmediate(() => {
 			this.emit('output', output);
@@ -550,6 +554,99 @@ suite('EvalServer', () => {
 		test('stop() refuses further connections', async () => {
 			await server.stop();
 			await assert.rejects(connect(port), /ECONNREFUSED|ECONNRESET/);
+		});
+	});
+
+	// ─────────────────────────────────────────────────────────────────────
+	// SHUTDOWN (codex review follow-up)
+	//
+	// Node's `server.close()` waits for existing connections to finish.
+	// An idle authed client would otherwise keep stop() pending forever,
+	// and token cleanup (which sits after the await) would never run.
+	// ─────────────────────────────────────────────────────────────────────
+
+	suite('shutdown with live connections', () => {
+		test('stop() removes the token file even when an idle authed socket is connected', async () => {
+			const token = readToken(tmpDir);
+			const sock = await connectAndAuth(port, token);
+			// sock stays open and idle through stop()
+			await server.stop();
+			assert.ok(
+				!fs.existsSync(path.join(tmpDir, 'eval-token')),
+				'token file must be removed even with a live connection',
+			);
+			sock.destroy();
+		});
+
+		test('stop() resolves promptly even with multiple idle authed sockets', async () => {
+			const token = readToken(tmpDir);
+			const socks: Net.Socket[] = [];
+			for (let i = 0; i < 3; i++) {
+				socks.push(await connectAndAuth(port, token));
+			}
+			const t0 = Date.now();
+			const result = await Promise.race([
+				server.stop().then(() => 'stopped' as const),
+				sleep(1000).then(() => 'timeout' as const),
+			]);
+			const elapsed = Date.now() - t0;
+			assert.strictEqual(
+				result, 'stopped',
+				`stop() must not hang on idle clients (waited ${elapsed}ms)`,
+			);
+			for (const s of socks) { s.destroy(); }
+		});
+
+		test('stop() closes live authed connections from the server side', async () => {
+			const token = readToken(tmpDir);
+			const sock = await connectAndAuth(port, token);
+			const observed = new Promise<boolean>((resolve) => {
+				sock.once('close', () => resolve(true));
+				setTimeout(() => resolve(false), 500);
+			});
+			await server.stop();
+			const closed = await observed;
+			assert.ok(closed, 'client must observe close after server.stop()');
+		});
+	});
+
+	// ─────────────────────────────────────────────────────────────────────
+	// LIVENESS UNDER MID-EVAL DISCONNECT (codex review follow-up)
+	//
+	// If the in-flight socket dies before `ready` fires, the current code
+	// leaves `_busy = true` and the entire queue is wedged. We don't add
+	// per-request *timeouts* (legitimate APL can run long), but we must
+	// detect a dead in-flight socket and drain.
+	// ─────────────────────────────────────────────────────────────────────
+
+	suite('liveness under mid-eval disconnect', () => {
+		test('in-flight socket closing before ready does not wedge the server', async () => {
+			const token = readToken(tmpDir);
+			session.autoReady = false; // 'slow' will never complete
+
+			const sockA = await connectAndAuth(port, token);
+			sockA.write('slow\n');
+			await sleep(50);
+			assert.deepStrictEqual(
+				session.executed, ['slow'],
+				'first request should have been dispatched',
+			);
+
+			// sockA dies before session emits ready
+			sockA.destroy();
+			await sleep(50);
+
+			// A second client must still be able to get a response
+			session.autoReady = true;
+			session.outputs['ok'] = 'ok_out';
+			const sockB = await connectAndAuth(port, token);
+			sockB.write('ok\n');
+			const responses = await readMessages(sockB, 1, 500);
+			assert.deepStrictEqual(
+				responses, ['ok_out'],
+				'queue must drain after the in-flight socket dies',
+			);
+			sockB.destroy();
 		});
 	});
 });

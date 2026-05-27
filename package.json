@@ -330,7 +330,8 @@
         "apl.evalServer.port": {
           "type": "number",
           "default": 0,
-          "description": "Open a TCP eval server on this port, allowing external tools to execute APL in the live session. Set to 0 to disable."
+          "scope": "machine",
+          "description": "Open a TCP eval server on this port, allowing external tools to execute APL in the live session. Set to 0 to disable. Machine-scoped: cannot be set per-workspace."
         }
       }
     },

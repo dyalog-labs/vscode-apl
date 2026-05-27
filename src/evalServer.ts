@@ -39,6 +39,7 @@ export class EvalServer {
 	private _token?: string;
 	private _queue: EvalRequest[] = [];
 	private _busy = false;
+	private _sockets: Set<Net.Socket> = new Set();
 
 	constructor(manager: ReplManager, tokenDir: string) {
 		this._manager = manager;
@@ -84,12 +85,22 @@ export class EvalServer {
 		if (this._server) {
 			const server = this._server;
 			this._server = undefined;
+			// Revoke the token first so even an in-flight connection can't be reused,
+			// and so cleanup runs even if `server.close()` is slow.
+			if (this._token !== undefined) {
+				try { fs.unlinkSync(path.join(this._tokenDir, TOKEN_FILE)); } catch { /* */ }
+				this._token = undefined;
+			}
+			// Destroy live sockets — otherwise `server.close()` waits forever for idle clients.
+			for (const s of this._sockets) {
+				try { s.destroy(); } catch { /* */ }
+			}
+			this._sockets.clear();
 			await new Promise<void>((resolve) => {
 				server.close(() => resolve());
 			});
 			console.log('[EvalServer] Stopped');
-		}
-		if (this._token !== undefined) {
+		} else if (this._token !== undefined) {
 			try { fs.unlinkSync(path.join(this._tokenDir, TOKEN_FILE)); } catch { /* */ }
 			this._token = undefined;
 		}
@@ -101,6 +112,9 @@ export class EvalServer {
 	}
 
 	private handleConnection(socket: Net.Socket): void {
+		this._sockets.add(socket);
+		socket.once('close', () => this._sockets.delete(socket));
+
 		let buf = '';
 		let authenticated = false;
 
@@ -152,16 +166,29 @@ export class EvalServer {
 			}
 			this._busy = true;
 			let output = '';
+			let settled = false;
 			const onOutput = (text: string) => { output += text; };
-			const onReady = () => {
+			const cleanup = () => {
+				if (settled) { return; }
+				settled = true;
 				session.removeListener('output', onOutput);
 				session.removeListener('ready', onReady);
+				req.socket.removeListener('close', onSocketClose);
 				this._busy = false;
-				try { req.socket.write(output + '\0'); } catch { /* */ }
 				this.dispatch();
 			};
+			const onReady = () => {
+				if (settled) { return; }
+				try { req.socket.write(output + '\0'); } catch { /* */ }
+				cleanup();
+			};
+			// If the in-flight client disconnects before `ready` fires, drain
+			// the listeners and free the queue — otherwise `_busy` stays true
+			// forever and every later request wedges.
+			const onSocketClose = () => { cleanup(); };
 			session.on('output', onOutput);
 			session.on('ready', onReady);
+			req.socket.once('close', onSocketClose);
 			session.execute(req.expr);
 			return;
 		}
