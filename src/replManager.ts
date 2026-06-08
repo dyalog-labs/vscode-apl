@@ -209,25 +209,42 @@ export class ReplManager implements vscode.Disposable {
 		this.getTab(replId)?.editWindowManager.closeTempTab(filename);
 	}
 
-	public startEvalServer(): void {
+	/**
+	 * Start the TCP eval server on the port from `apl.evalServer.port`.
+	 * Idempotent: if already running, returns the existing bound port
+	 * without rebinding.
+	 *
+	 * Rejects if the configured port is 0 (the "disabled" sentinel) or
+	 * on bind failure (e.g. EADDRINUSE). The caller surfaces the message
+	 * to the user via a toast.
+	 */
+	public async startEvalServer(): Promise<number> {
 		const config = vscode.workspace.getConfiguration('apl');
-		const port = config.get<number>('evalServer.port') || 0;
-		if (port <= 0) { return; }
-
+		const port = config.get<number>('evalServer.port') ?? 0;
+		if (port <= 0) {
+			throw new Error(
+				'apl.evalServer.port is 0 (disabled). Set a port in user or workspace settings before starting.',
+			);
+		}
 		if (!this._evalServer) {
 			this._evalServer = new EvalServer(this);
 		}
-		this._evalServer.start(port).catch((e: Error) => {
-			console.log(`[EvalServer] failed to start: ${e.message}`);
-		});
+		return this._evalServer.start(port);
 	}
 
-	public stopEvalServer(): void {
-		this._evalServer?.stop().catch(() => { /* */ });
+	public async stopEvalServer(): Promise<void> {
+		if (this._evalServer?.isRunning()) {
+			await this._evalServer.stop();
+		}
+	}
+
+	public isEvalServerRunning(): boolean {
+		return this._evalServer?.isRunning() ?? false;
 	}
 
 	public dispose(): void {
-		this.stopEvalServer();
+		// Fire-and-forget — dispose is sync. Server.stop() is internally idempotent.
+		this.stopEvalServer().catch(() => { /* */ });
 		for (const tab of this._tabs.values()) {
 			tab.dispose();
 		}

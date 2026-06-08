@@ -75,6 +75,8 @@
     "onCommand:extension.apl-debug.help",
     "onCommand:apl.focusRepl",
     "onCommand:apl.newRepl",
+    "onCommand:apl.evalServer.start",
+    "onCommand:apl.evalServer.stop",
     "onLanguage:apl",
     "onView:aplRepl"
   ],
@@ -198,6 +200,14 @@
         {
           "command": "extension.apl-debug.runEditorContents",
           "when": "resourceLangId == apl"
+        },
+        {
+          "command": "apl.evalServer.start",
+          "when": "!apl.evalServer.running"
+        },
+        {
+          "command": "apl.evalServer.stop",
+          "when": "apl.evalServer.running"
         }
       ],
       "debug/variables/context": [
@@ -282,6 +292,16 @@
         "command": "apl.localizeVariable",
         "title": "Localize Variable",
         "category": "APL"
+      },
+      {
+        "command": "apl.evalServer.start",
+        "title": "Start Eval Server",
+        "category": "APL"
+      },
+      {
+        "command": "apl.evalServer.stop",
+        "title": "Stop Eval Server",
+        "category": "APL"
       }
     ],
     "configuration": {
@@ -330,8 +350,9 @@
         "apl.evalServer.port": {
           "type": "number",
           "default": 0,
-          "scope": "machine",
-          "description": "Open a TCP eval server on this port, allowing external tools to execute APL in the live session. Set to 0 to disable. Machine-scoped: cannot be set per-workspace."
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Port to bind when the eval server is started via the 'APL: Start Eval Server' command. Set to 0 to disable (the start command will refuse). The server does not start automatically; enable it explicitly per window."
         }
       }
     },

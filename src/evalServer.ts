@@ -65,6 +65,10 @@ export class EvalServer {
 		});
 	}
 
+	public isRunning(): boolean {
+		return this._server !== undefined;
+	}
+
 	public async stop(): Promise<void> {
 		if (this._server) {
 			const server = this._server;
