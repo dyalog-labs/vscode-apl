@@ -79,7 +79,7 @@ export function activateAplDebug(context: vscode.ExtensionContext) {
 	// Initialize the REPL manager (multi-tab REPL support)
 	const replManager = ReplManager.getInstance();
 	replManager.initialize(context);
-	replManager.startEvalServer(context.globalStorageUri.fsPath);
+	replManager.startEvalServer();
 	context.subscriptions.push(replManager);
 
 	// Register the REPL view provider for bottom panel

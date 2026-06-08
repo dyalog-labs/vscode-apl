@@ -1,31 +1,24 @@
 import * as Net from 'net';
-import * as crypto from 'crypto';
-import * as fs from 'fs';
-import * as path from 'path';
 import type { ReplManager } from './replManager';
 
 /**
- * TCP server that lets external tools execute APL in the active REPL session.
+ * TCP server (127.0.0.1) that runs APL in the active REPL for external tools.
  *
- * Protocol:
- *  - First non-empty line of each connection must be `]auth <token>\n`.
- *    The token is a 64-char hex string written to `<tokenDir>/eval-token`
- *    on start. Anything else closes the socket before any APL reaches the
- *    session — this is what protects against local processes and against
- *    browser drive-by attacks (a browser cannot make the first line of a
- *    TCP payload be `]auth …`, since the request always starts with an
- *    HTTP request line or WS handshake).
- *  - On success the server writes `(ok)\0`. The client may then send APL
- *    expressions (one per line) or `]`-prefixed meta-commands. Each reply
- *    is text followed by `\0`.
- *  - Requests are processed through a server-wide FIFO queue so that
- *    concurrent connections — and rapid back-to-back requests on a single
- *    connection — don't cross-contaminate outputs.
+ * Protocol: APL expressions or `]`-prefixed meta-commands, one per line;
+ * each reply is text terminated by `\0`. A single FIFO queue serializes
+ * requests so concurrent connections don't cross-contaminate output.
  *
- * Bound to 127.0.0.1. Auth is the primary defence; loopback is defence-in-depth.
+ * Browser drive-by defense: reject HTTP request lines (plaintext) and TLS
+ * ClientHellos (first byte 0x16); drop sockets that send nothing within
+ * PRE_DATA_TIMEOUT_MS. Any local process running as the user can still
+ * connect — same trust model as RIDE and the language server.
  */
 
-const TOKEN_FILE = 'eval-token';
+// Known HTTP method + ` HTTP/<digit>` trailer. Both are required so a stray
+// APL call like `GET 1 2 3` or `FOO bar HTTP/1` won't false-match.
+const HTTP_REQUEST_LINE = /^(GET|POST|HEAD|OPTIONS|PUT|DELETE|PATCH|CONNECT|TRACE) \S+ HTTP\/\d/;
+const TLS_HANDSHAKE_BYTE = 0x16;
+const PRE_DATA_TIMEOUT_MS = 2000;
 
 interface EvalRequest {
 	expr: string;
@@ -35,15 +28,12 @@ interface EvalRequest {
 export class EvalServer {
 	private _server?: Net.Server;
 	private _manager: ReplManager;
-	private _tokenDir: string;
-	private _token?: string;
 	private _queue: EvalRequest[] = [];
 	private _busy = false;
 	private _sockets: Set<Net.Socket> = new Set();
 
-	constructor(manager: ReplManager, tokenDir: string) {
+	constructor(manager: ReplManager) {
 		this._manager = manager;
-		this._tokenDir = tokenDir;
 	}
 
 	public async start(port: number): Promise<number> {
@@ -51,12 +41,6 @@ export class EvalServer {
 			const addr = this._server.address() as Net.AddressInfo;
 			return addr.port;
 		}
-
-		this._token = crypto.randomBytes(32).toString('hex');
-		fs.mkdirSync(this._tokenDir, { recursive: true });
-		const tokenPath = path.join(this._tokenDir, TOKEN_FILE);
-		try { fs.unlinkSync(tokenPath); } catch { /* may not exist */ }
-		fs.writeFileSync(tokenPath, this._token, { mode: 0o600 });
 
 		return new Promise((resolve, reject) => {
 			const server = Net.createServer((socket) => this.handleConnection(socket));
@@ -85,27 +69,13 @@ export class EvalServer {
 		if (this._server) {
 			const server = this._server;
 			this._server = undefined;
-			// Revoke the token first so even an in-flight connection can't be reused,
-			// and so cleanup runs even if `server.close()` is slow.
-			if (this._token !== undefined) {
-				try { fs.unlinkSync(path.join(this._tokenDir, TOKEN_FILE)); } catch { /* */ }
-				this._token = undefined;
-			}
-			// Destroy live sockets — otherwise `server.close()` waits forever for idle clients.
-			for (const s of this._sockets) {
-				try { s.destroy(); } catch { /* */ }
-			}
+			// server.close() otherwise hangs on idle clients.
+			for (const s of this._sockets) { s.destroy(); }
 			this._sockets.clear();
 			await new Promise<void>((resolve) => {
 				server.close(() => resolve());
 			});
 			console.log('[EvalServer] Stopped');
-		} else if (this._token !== undefined) {
-			try { fs.unlinkSync(path.join(this._tokenDir, TOKEN_FILE)); } catch { /* */ }
-			this._token = undefined;
-		}
-		for (const req of this._queue) {
-			try { req.socket.destroy(); } catch { /* */ }
 		}
 		this._queue = [];
 		this._busy = false;
@@ -113,30 +83,47 @@ export class EvalServer {
 
 	private handleConnection(socket: Net.Socket): void {
 		this._sockets.add(socket);
-		socket.once('close', () => this._sockets.delete(socket));
 
 		let buf = '';
-		let authenticated = false;
+		let cleared = false;
+		let idleTimer: NodeJS.Timeout | undefined = setTimeout(() => {
+			if (!cleared) { socket.destroy(); }
+		}, PRE_DATA_TIMEOUT_MS);
+
+		const clearIdleTimer = () => {
+			if (idleTimer) { clearTimeout(idleTimer); idleTimer = undefined; }
+		};
+
+		socket.once('close', () => {
+			clearIdleTimer();
+			this._sockets.delete(socket);
+		});
 
 		socket.on('data', (data) => {
 			buf += data.toString();
+
+			if (!cleared) {
+				// TLS ClientHello has no newline — sniff before waiting for one.
+				if (buf.charCodeAt(0) === TLS_HANDSHAKE_BYTE) {
+					socket.destroy();
+					return;
+				}
+				const nl = buf.indexOf('\n');
+				if (nl === -1) { return; }
+				const firstLine = buf.slice(0, nl).replace(/\r$/, '');
+				if (HTTP_REQUEST_LINE.test(firstLine)) {
+					socket.destroy();
+					return;
+				}
+				cleared = true;
+				clearIdleTimer();
+			}
+
 			let nl: number;
 			while ((nl = buf.indexOf('\n')) !== -1) {
 				const expr = buf.slice(0, nl).replace(/\r$/, '');
 				buf = buf.slice(nl + 1);
 				if (!expr) { continue; }
-
-				if (!authenticated) {
-					if (this._token !== undefined && expr === `]auth ${this._token}`) {
-						authenticated = true;
-						try { socket.write('(ok)\0'); } catch { /* */ }
-					} else {
-						try { socket.end('(auth required)\0'); } catch { /* */ }
-						try { socket.destroy(); } catch { /* */ }
-						return;
-					}
-					continue;
-				}
 
 				if (expr.startsWith(']')) {
 					try { socket.write(this.handleMetaCommand(expr) + '\0'); } catch { /* */ }
@@ -148,7 +135,7 @@ export class EvalServer {
 			}
 		});
 
-		socket.on('error', () => { /* swallow — Node defaults to throwing */ });
+		socket.on('error', () => { /* Node throws otherwise */ });
 	}
 
 	private dispatch(): void {
@@ -182,9 +169,8 @@ export class EvalServer {
 				try { req.socket.write(output + '\0'); } catch { /* */ }
 				cleanup();
 			};
-			// If the in-flight client disconnects before `ready` fires, drain
-			// the listeners and free the queue — otherwise `_busy` stays true
-			// forever and every later request wedges.
+			// If the client dies before `ready` fires, free `_busy` so the
+			// queue doesn't wedge.
 			const onSocketClose = () => { cleanup(); };
 			session.on('output', onOutput);
 			session.on('ready', onReady);
@@ -214,14 +200,13 @@ export class EvalServer {
 					|| '[No tabs]';
 			}
 			case 'switch': {
-				// Join all remaining parts so multi-word labels work, e.g. `]switch My Tab`.
+				// Multi-word labels: `]switch My Tab`.
 				const id = parts.slice(1).join(' ');
 				if (!id) { return '[Usage: ]switch <replId>]'; }
 				const tab = this._manager.getTab(id);
 				if (!tab) {
 					const match = this._manager.getTabList().find(t =>
-						t.label.toLowerCase().includes(id.toLowerCase()) ||
-						t.replId.includes(id)
+						t.label.toLowerCase().includes(id.toLowerCase())
 					);
 					if (match) {
 						this._manager.switchToTab(match.replId);
