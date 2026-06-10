@@ -6,6 +6,7 @@ import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as Path from 'path';
 import { AplSession, LinkInfoRow } from './aplSession';
+import { mapBreakpointsToStops } from './linkBreakpoints';
 import { TEMP_DIR } from './editWindowManager';
 import { normPath, PendingRequest, PendingRequests } from './utils';
 import type {
@@ -832,30 +833,17 @@ export class AplRuntime extends EventEmitter {
 	}
 
 	private async setBreakPointOnFile(bps: IAplBreakpoint[], filePath: string): Promise<void> {
-		const fnbp = {};
 		const linkInfo = this._session?.linkInfo ?? [];
 		if (linkInfo.length === 0) {
 			return;
 		}
-		const normalizedPath = normPath(filePath);
-		const matched: IAplBreakpoint[] = [];
-		bps.forEach((bp) => {
-			// Find the closest preceding function (largest startLine <= bp.line)
-			let row: LinkInfoRow | undefined;
-			for (const r of linkInfo) {
-				if (normPath(r.filePath) === normalizedPath && r.startLine <= bp.line) {
-					if (!row || r.startLine > row.startLine) { row = r; }
-				}
-			}
-			if (row) {
-				const lines = fnbp[row.aplName] || [];
-				lines.push(bp.line - row.startLine);
-				fnbp[row.aplName] = lines;
-				matched.push(bp);
-			}
-		});
-		for (const aplName of Object.keys(fnbp)) {
-			const lines = fnbp[aplName].join(' ');
+		const { stops, matched } = mapBreakpointsToStops(
+			bps.map(bp => ({ line: bp.line, bp })),
+			filePath,
+			linkInfo,
+		);
+		for (const aplName of Object.keys(stops)) {
+			const lines = stops[aplName].join(' ');
 			await this.exec(0, `{}${lines} ⎕STOP '${aplName}'`, 1);
 		}
 		for (const bp of matched) {
