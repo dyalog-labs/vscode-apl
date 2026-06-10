@@ -248,7 +248,7 @@ suite('EvalServer', () => {
 		test('accepts a meta-command sent immediately', async () => {
 			manager.tabList = [{ replId: 't', label: 'Tab', isActive: true }];
 			const sock = await connect(port);
-			sock.write(']tabs\n');
+			sock.write('/tabs\n');
 			const responses = await readMessages(sock, 1);
 			assert.strictEqual(responses[0], '* t Tab');
 			sock.destroy();
@@ -353,7 +353,7 @@ suite('EvalServer', () => {
 			manager.activeTabValue = tab1;
 		};
 
-		test(']history returns the active tab\'s output history', async () => {
+		test('/history returns the active tab\'s output history', async () => {
 			manager.activeTabValue = {
 				label: 'A',
 				outputHistory: [
@@ -362,81 +362,81 @@ suite('EvalServer', () => {
 				],
 			};
 			const sock = await connect(port);
-			sock.write(']history\n');
+			sock.write('/history\n');
 			const responses = await readMessages(sock, 1);
 			assert.strictEqual(responses[0], '[in] foo\n[out] bar\n');
 			sock.destroy();
 		});
 
-		test(']history returns [Empty history] when the tab has no output', async () => {
+		test('/history returns [Empty history] when the tab has no output', async () => {
 			manager.activeTabValue = { label: 'A', outputHistory: [] };
 			const sock = await connect(port);
-			sock.write(']history\n');
+			sock.write('/history\n');
 			const responses = await readMessages(sock, 1);
 			assert.strictEqual(responses[0], '[Empty history]');
 			sock.destroy();
 		});
 
-		test(']history returns [No active tab] when there is no active tab', async () => {
+		test('/history returns [No active tab] when there is no active tab', async () => {
 			manager.activeTabValue = undefined;
 			const sock = await connect(port);
-			sock.write(']history\n');
+			sock.write('/history\n');
 			const responses = await readMessages(sock, 1);
 			assert.strictEqual(responses[0], '[No active tab]');
 			sock.destroy();
 		});
 
-		test(']tabs lists tabs with active marker', async () => {
+		test('/tabs lists tabs with active marker', async () => {
 			populateTabs();
 			const sock = await connect(port);
-			sock.write(']tabs\n');
+			sock.write('/tabs\n');
 			const responses = await readMessages(sock, 1);
 			assert.strictEqual(responses[0], '* tab-1 Workspace A\n  tab-2 Workspace B');
 			sock.destroy();
 		});
 
-		test(']tabs returns [No tabs] when there are no tabs', async () => {
+		test('/tabs returns [No tabs] when there are no tabs', async () => {
 			manager.tabList = [];
 			const sock = await connect(port);
-			sock.write(']tabs\n');
+			sock.write('/tabs\n');
 			const responses = await readMessages(sock, 1);
 			assert.strictEqual(responses[0], '[No tabs]');
 			sock.destroy();
 		});
 
-		test(']switch <exact-id> switches to that tab', async () => {
+		test('/switch <exact-id> switches to that tab', async () => {
 			populateTabs();
 			const sock = await connect(port);
-			sock.write(']switch tab-2\n');
+			sock.write('/switch tab-2\n');
 			const responses = await readMessages(sock, 1);
 			assert.strictEqual(responses[0], 'Switched to Workspace B');
 			assert.deepStrictEqual(manager.switchCalls, ['tab-2']);
 			sock.destroy();
 		});
 
-		test(']switch <substring of label> matches and switches', async () => {
+		test('/switch <substring of label> matches and switches', async () => {
 			populateTabs();
 			const sock = await connect(port);
-			sock.write(']switch workspace b\n');
+			sock.write('/switch workspace b\n');
 			const responses = await readMessages(sock, 1);
 			assert.strictEqual(responses[0], 'Switched to Workspace B');
 			assert.deepStrictEqual(manager.switchCalls, ['tab-2']);
 			sock.destroy();
 		});
 
-		test(']switch <unknown> returns not-found error', async () => {
+		test('/switch <unknown> returns not-found error', async () => {
 			populateTabs();
 			const sock = await connect(port);
-			sock.write(']switch nope\n');
+			sock.write('/switch nope\n');
 			const responses = await readMessages(sock, 1);
 			assert.match(responses[0], /Tab not found.*nope/);
 			assert.deepStrictEqual(manager.switchCalls, []);
 			sock.destroy();
 		});
 
-		test(']switch without arg returns usage', async () => {
+		test('/switch without arg returns usage', async () => {
 			const sock = await connect(port);
-			sock.write(']switch\n');
+			sock.write('/switch\n');
 			const responses = await readMessages(sock, 1);
 			assert.match(responses[0], /Usage.*switch/);
 			sock.destroy();
@@ -444,7 +444,7 @@ suite('EvalServer', () => {
 
 		test('unknown meta-command returns help text', async () => {
 			const sock = await connect(port);
-			sock.write(']bogus\n');
+			sock.write('/bogus\n');
 			const responses = await readMessages(sock, 1);
 			assert.match(responses[0], /Unknown command/);
 			assert.match(responses[0], /history.*tabs.*switch/s);

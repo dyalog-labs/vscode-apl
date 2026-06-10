@@ -4,7 +4,7 @@ import type { ReplManager } from './replManager';
 /**
  * TCP server (127.0.0.1) that runs APL in the active REPL for external tools.
  *
- * Protocol: APL expressions or `]`-prefixed meta-commands, one per line;
+ * Protocol: APL expressions or `/`-prefixed meta-commands, one per line;
  * each reply is text terminated by `\0`. A single FIFO queue serializes
  * requests so concurrent connections don't cross-contaminate output.
  *
@@ -129,7 +129,7 @@ export class EvalServer {
 				buf = buf.slice(nl + 1);
 				if (!expr) { continue; }
 
-				if (expr.startsWith(']')) {
+				if (expr.startsWith('/')) {
 					try { socket.write(this.handleMetaCommand(expr) + '\0'); } catch { /* */ }
 					continue;
 				}
@@ -204,9 +204,9 @@ export class EvalServer {
 					|| '[No tabs]';
 			}
 			case 'switch': {
-				// Multi-word labels: `]switch My Tab`.
+				// Multi-word labels: `/switch My Tab`.
 				const id = parts.slice(1).join(' ');
-				if (!id) { return '[Usage: ]switch <replId>]'; }
+				if (!id) { return '[Usage: /switch <replId>]'; }
 				const tab = this._manager.getTab(id);
 				if (!tab) {
 					const match = this._manager.getTabList().find(t =>
@@ -222,7 +222,7 @@ export class EvalServer {
 				return `Switched to ${tab.label}`;
 			}
 			default:
-				return `[Unknown command: ]${cmd}]\nAvailable: ]history, ]tabs, ]switch <id>`;
+				return `[Unknown command: /${cmd}]\nAvailable: /history, /tabs, /switch <id>`;
 		}
 	}
 }
