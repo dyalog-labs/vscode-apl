@@ -14,10 +14,10 @@ import * as vscode from 'vscode';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import { basename } from 'path-browserify';
 import { AplRuntime, IAplBreakpoint, FileAccessor } from './aplRuntime';
-import { ReplManager } from './replManager';
-import type { InterpreterStatusMessage, OpenWindowMessage, ReplyGetHelpInformationMessage, ShowHTMLMessage, ValueTipMessage } from './rideMessages';
+import { ReplManager } from '../repl/replManager';
+import type { InterpreterStatusMessage, OpenWindowMessage, ReplyGetHelpInformationMessage, ShowHTMLMessage, ValueTipMessage } from '../session/rideMessages';
 import { Subject } from 'await-notify';
-import { injectCSP } from './utils';
+import { injectCSP } from '../utils';
 
 // function timeout(ms: number) {
 // 	return new Promise(resolve => setTimeout(resolve, ms));

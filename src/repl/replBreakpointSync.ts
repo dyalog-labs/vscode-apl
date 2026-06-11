@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
-import { AplSession, LinkInfoRow } from './aplSession';
-import { mapBreakpointsToStops } from './linkBreakpoints';
-import { normPath } from './utils';
+import { AplSession, LinkInfoRow } from '../session/aplSession';
+import { mapBreakpointsToStops } from '../debug/linkBreakpoints';
+import { normPath } from '../utils';
 
 /**
  * Syncs VS Code breakpoints to the Dyalog interpreter when a REPL

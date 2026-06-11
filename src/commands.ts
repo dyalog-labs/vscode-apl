@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import { ReplManager } from './replManager';
-import { handleHelp } from './aplHelp';
+import { ReplManager } from './repl/replManager';
+import { handleHelp } from './editor/aplHelp';
 
 /**
  * Register every command this extension contributes. Pure side-effect:

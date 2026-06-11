@@ -7,12 +7,12 @@
 import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { WorkspaceFolder, DebugConfiguration, ProviderResult } from 'vscode';
-import { DyalogConnection, findConnectionsFile } from './dyalogConnections';
-import { ReplManager } from './replManager';
-import { ReplViewProvider } from './replPanel';
-import { AplBacktickHandler } from './aplBacktick';
-import { cleanTempDir } from './editWindowManager';
-import { AplConfigurationProvider, InlineDebugAdapterFactory } from './debugConfigProvider';
+import { DyalogConnection, findConnectionsFile } from './debug/dyalogConnections';
+import { ReplManager } from './repl/replManager';
+import { ReplViewProvider } from './repl/replPanel';
+import { AplBacktickHandler } from './editor/aplBacktick';
+import { cleanTempDir } from './editor/editWindowManager';
+import { AplConfigurationProvider, InlineDebugAdapterFactory } from './debug/debugConfigProvider';
 import { registerCommands } from './commands';
 
 let aplStatusBarItem: vscode.StatusBarItem;

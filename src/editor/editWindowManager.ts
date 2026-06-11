@@ -2,8 +2,8 @@ import * as vscode from 'vscode';
 import * as os from 'os';
 import * as fs from 'fs';
 import * as Path from 'path';
-import { AplSession } from './aplSession';
-import type { CloseWindowMessage, GotoWindowMessage, OpenWindowMessage, ReplySaveChangesMessage } from './rideMessages';
+import { AplSession } from '../session/aplSession';
+import type { CloseWindowMessage, GotoWindowMessage, OpenWindowMessage, ReplySaveChangesMessage } from '../session/rideMessages';
 
 interface EditWindowEntry {
 	uri: vscode.Uri;

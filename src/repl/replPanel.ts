@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { ReplManager } from './replManager';
-import { getAplKeysForWebview } from './aplKeys';
-import { handleHelpForLine } from './aplHelp';
+import { getAplKeysForWebview } from '../editor/aplKeys';
+import { handleHelpForLine } from '../editor/aplHelp';
 
 /**
  * WebviewViewProvider for the APL REPL panel (bottom panel area).

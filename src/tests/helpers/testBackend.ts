@@ -3,9 +3,9 @@ import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { AplRuntime, FileAccessor } from '../../aplRuntime';
-import { AplSession } from '../../aplSession';
-import { findDyalogExe } from '../../findDyalogExe';
+import { AplRuntime, FileAccessor } from '../../debug/aplRuntime';
+import { AplSession } from '../../session/aplSession';
+import { findDyalogExe } from '../../session/findDyalogExe';
 import { MockRideServer } from './mockRideServer';
 import { seedLinkInfo } from './sessionTestUtils';
 

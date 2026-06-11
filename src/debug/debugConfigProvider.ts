@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { WorkspaceFolder, DebugConfiguration, ProviderResult, CancellationToken } from 'vscode';
 import { AplDebugSession } from './aplDebug';
 import { FileAccessor } from './aplRuntime';
-import { ReplManager } from './replManager';
+import { ReplManager } from '../repl/replManager';
 
 /**
  * Debug configuration plumbing for the `apl` debug type:

@@ -1,5 +1,5 @@
-import { LinkInfoRow } from './aplSession';
-import { normPath } from './utils';
+import { LinkInfoRow } from '../session/aplSession';
+import { normPath } from '../utils';
 
 /**
  * For each `{ line, bp }` in `items`, find the closest preceding function

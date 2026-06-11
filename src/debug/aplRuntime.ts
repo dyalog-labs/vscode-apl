@@ -5,10 +5,10 @@
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as Path from 'path';
-import { AplSession, LinkInfoRow } from './aplSession';
+import { AplSession, LinkInfoRow } from '../session/aplSession';
 import { mapBreakpointsToStops } from './linkBreakpoints';
-import { TEMP_DIR } from './editWindowManager';
-import { normPath, PendingRequest, PendingRequests } from './utils';
+import { TEMP_DIR } from '../editor/editWindowManager';
+import { normPath, PendingRequest, PendingRequests } from '../utils';
 import type {
 	AppendSessionOutputMessage, CloseWindowMessage, DisconnectMessage, EchoInputMessage,
 	GetHelpInformationMessage, GotoWindowMessage, HadErrorMessage, IdentifyMessage,
@@ -21,7 +21,7 @@ import type {
 	ShowHTMLMessage, StatusOutputMessage, StringDialogMessage, SysErrorMessage,
 	TaskDialogMessage, UnknownCommandMessage, UpdateDisplayNameMessage, ValueTipMessage,
 	WindowTypeChangedMessage,
-} from './rideMessages';
+} from '../session/rideMessages';
 
 /**
  * Parse a stack frame description in `name[line]` format.
