@@ -8,7 +8,7 @@ import * as vscode from 'vscode';
 import { ReplManager } from './repl/replManager';
 import { ReplViewProvider } from './repl/replPanel';
 import { AplBacktickHandler } from './editor/aplBacktick';
-import { cleanTempDir } from './editor/editWindowManager';
+import { cleanTempDir } from './editor/tempFiles';
 import {
 	AplConfigurationProvider,
 	DyalogConnectionConfigProvider,
