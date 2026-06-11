@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { AplSession, LinkInfoRow } from '../session/aplSession';
-import { mapBreakpointsToStops } from '../debug/linkBreakpoints';
+import { mapBreakpointsToStops } from '../session/linkBreakpoints';
 import { normPath } from '../utils';
 
 /**

@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { LinkInfoRow } from '../../session/aplSession';
-import { mapBreakpointsToStops } from '../../debug/linkBreakpoints';
+import { mapBreakpointsToStops } from '../../session/linkBreakpoints';
 
 /**
  * `mapBreakpointsToStops` is the shared algorithm behind both

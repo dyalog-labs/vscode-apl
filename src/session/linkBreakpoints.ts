@@ -1,4 +1,4 @@
-import { LinkInfoRow } from '../session/aplSession';
+import { LinkInfoRow } from './aplSession';
 import { normPath } from '../utils';
 
 /**

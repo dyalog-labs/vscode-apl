@@ -6,7 +6,7 @@ import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as Path from 'path';
 import { AplSession, LinkInfoRow } from '../session/aplSession';
-import { mapBreakpointsToStops } from './linkBreakpoints';
+import { mapBreakpointsToStops } from '../session/linkBreakpoints';
 import { TEMP_DIR } from '../editor/editWindowManager';
 import { normPath, PendingRequest, PendingRequests } from '../utils';
 import type {
