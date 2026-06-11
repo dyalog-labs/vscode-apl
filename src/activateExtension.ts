@@ -65,7 +65,14 @@ function getDyalogDebugConfigs(): DebugConfiguration[] {
 	}
 }
 
-export function activateAplDebug(context: vscode.ExtensionContext) {
+/**
+ * The extension's activation entry point — registers every long-lived
+ * provider (status bar, REPL manager, webview, backtick handler,
+ * commands, debug configurations, language providers) on
+ * `context.subscriptions` and returns the singletons that other
+ * extensions can pick up via `vscode.extensions.getExtension(...).exports`.
+ */
+export function activateExtension(context: vscode.ExtensionContext): { replManager: ReplManager } {
 	cleanTempDir();
 
 	// create a new status bar item that we can now manage
@@ -182,5 +189,7 @@ export function activateAplDebug(context: vscode.ExtensionContext) {
 			return allValues;
 		}
 	}));
+
+	return { replManager };
 }
 

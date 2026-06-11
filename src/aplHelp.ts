@@ -590,7 +590,7 @@ code{background:transparent !important;background-color:transparent !important}
 }
 
 /**
- * Handle the F1 help command. Called from activateAplDebug.
+ * Handle the F1 help command. Called from the command-table wiring.
  */
 export async function handleHelp(
 	editor: vscode.TextEditor,

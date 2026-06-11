@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { AplSession } from './aplSession';
 import { ReplTab } from './replTab';
-import { updateStatusBar } from './activateAplDebug';
+import { updateStatusBar } from './activateExtension';
 
 /**
  * Manages all REPL tabs. Singleton accessible from both

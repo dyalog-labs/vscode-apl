@@ -5,7 +5,7 @@ import { handleHelp } from './aplHelp';
 /**
  * Register every command this extension contributes. Pure side-effect:
  * each `registerCommand` / `registerTextEditorCommand` is pushed onto
- * `context.subscriptions`. Split out of `activateAplDebug.ts` so the
+ * `context.subscriptions`. Split out of `activateExtension.ts` so the
  * entry-point file reads as wiring, not command bodies.
  *
  * The only state shared across commands is `lastStepTime`, captured by

@@ -5,12 +5,10 @@
 'use strict';
 
 import * as vscode from 'vscode';
-import { activateAplDebug } from './activateAplDebug';
-import { ReplManager } from './replManager';
+import { activateExtension } from './activateExtension';
 
 export function activate(context: vscode.ExtensionContext) {
-	activateAplDebug(context);
-	return { replManager: ReplManager.getInstance() };
+	return activateExtension(context);
 }
 
 export function deactivate() {

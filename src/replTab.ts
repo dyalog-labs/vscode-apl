@@ -3,7 +3,7 @@ import { AplSession, ConnectionState } from './aplSession';
 import { EditWindowManager } from './editWindowManager';
 import { ReplManager } from './replManager';
 import { ReplBreakpointSync } from './replBreakpointSync';
-import { updateStatusBar } from './activateAplDebug';
+import { updateStatusBar } from './activateExtension';
 import { openAplDefinition, isValidNamespace, injectCSP } from './utils';
 
 /**
