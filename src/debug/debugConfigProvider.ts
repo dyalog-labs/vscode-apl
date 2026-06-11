@@ -99,25 +99,17 @@ function getDyalogDebugConfigs(): DebugConfiguration[] {
 		for (const conn of connections) {
 			if (!conn.name) { continue; }
 
+			const base = {
+				type: 'apl',
+				request: 'launch',
+				name: conn.name.trim(),
+				cwd: '${workspaceFolder}',
+				stopOnEntry: true,
+			};
 			if (conn.type === 'start' && conn.exe) {
-				configs.push({
-					type: 'apl',
-					request: 'launch',
-					name: conn.name.trim(),
-					exe: conn.exe,
-					cwd: '${workspaceFolder}',
-					stopOnEntry: true,
-				});
+				configs.push({ ...base, exe: conn.exe });
 			} else if (conn.port) {
-				configs.push({
-					type: 'apl',
-					request: 'launch',
-					name: conn.name.trim(),
-					host: conn.host || '127.0.0.1',
-					port: parseInt(conn.port, 10),
-					cwd: '${workspaceFolder}',
-					stopOnEntry: true,
-				});
+				configs.push({ ...base, host: conn.host || '127.0.0.1', port: parseInt(conn.port, 10) });
 			}
 		}
 		return configs;
