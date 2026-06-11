@@ -7,7 +7,7 @@
 import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { WorkspaceFolder, DebugConfiguration, ProviderResult } from 'vscode';
-import { DyalogConnection, findConnectionsFile } from './findDyalog';
+import { DyalogConnection, findConnectionsFile } from './dyalogConnections';
 import { ReplManager } from './replManager';
 import { ReplViewProvider } from './replPanel';
 import { AplBacktickHandler } from './aplBacktick';

@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { AplRuntime, FileAccessor } from '../../aplRuntime';
 import { AplSession } from '../../aplSession';
-import { findDyalogExe } from '../../findDyalog';
+import { findDyalogExe } from '../../findDyalogExe';
 import { MockRideServer } from './mockRideServer';
 import { seedLinkInfo } from './sessionTestUtils';
 

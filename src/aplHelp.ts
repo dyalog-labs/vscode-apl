@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as Path from 'path';
 import * as cp from 'child_process';
-import { findDyalogDir as findDyalogDirBase } from './findDyalog';
+import { findDyalogDir as findDyalogDirBase } from './findDyalogExe';
 
 /**
  * Mapping from APL glyphs to their symbol overview page
