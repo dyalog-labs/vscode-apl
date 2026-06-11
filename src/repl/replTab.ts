@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
-import { AplSession, ConnectionState } from '../session/aplSession';
+import type { AplSession, ConnectionState } from '../session/aplSession';
 import { EditWindowManager } from '../editor/editWindowManager';
-import { ReplManager } from './replManager';
+import type { ReplManager } from './replManager';
 import { ReplBreakpointSync } from './replBreakpointSync';
 import { updateStatusBar } from '../statusBar';
 import { openAplDefinition, isValidNamespace, injectCSP } from '../utils';

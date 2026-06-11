@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { ReplManager } from './repl/replManager';
+import type { ReplManager } from './repl/replManager';
 import { handleHelp } from './editor/aplHelp';
 
 /**

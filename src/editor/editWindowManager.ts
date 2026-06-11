@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as Path from 'path';
-import { AplSession } from '../session/aplSession';
+import type { AplSession } from '../session/aplSession';
 import type { CloseWindowMessage, GotoWindowMessage, OpenWindowMessage, ReplySaveChangesMessage } from '../session/rideMessages';
 import { TEMP_DIR } from './tempFiles';
 

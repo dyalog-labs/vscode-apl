@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { WorkspaceFolder, DebugConfiguration, ProviderResult, CancellationToken } from 'vscode';
 import { AplDebugSession } from './aplDebug';
-import { FileAccessor } from './aplRuntime';
+import type { FileAccessor } from './aplRuntime';
 import { ReplManager } from '../repl/replManager';
 import { DyalogConnection, findConnectionsFile } from './dyalogConnections';
 
