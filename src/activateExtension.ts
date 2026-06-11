@@ -15,12 +15,7 @@ import {
 	InlineDebugAdapterFactory,
 } from './debug/debugConfigProvider';
 import { registerCommands } from './commands';
-
-let aplStatusBarItem: vscode.StatusBarItem;
-
-export function updateStatusBar(text: string): void {
-	aplStatusBarItem.text = text;
-}
+import { createStatusBar, updateStatusBar } from './statusBar';
 
 /**
  * The extension's activation entry point — registers every long-lived
@@ -33,9 +28,7 @@ export function activateExtension(context: vscode.ExtensionContext): { replManag
 	cleanTempDir();
 
 	// create a new status bar item that we can now manage
-	aplStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-	aplStatusBarItem.show();
-	context.subscriptions.push(aplStatusBarItem);
+	createStatusBar(context);
 
 	// Initialize the REPL manager (multi-tab REPL support)
 	const replManager = ReplManager.getInstance();
@@ -72,7 +65,7 @@ export function activateExtension(context: vscode.ExtensionContext): { replManag
 	context.subscriptions.push(vscode.debug.registerDebugAdapterDescriptorFactory('apl', new InlineDebugAdapterFactory()));
 	context.subscriptions.push(vscode.debug.onDidReceiveDebugSessionCustomEvent((customEvent) => {
 		if (customEvent.event === 'statusInformation') {
-			aplStatusBarItem.text = customEvent.body.text;
+			updateStatusBar(customEvent.body.text);
 		} else if (customEvent.event === 'closeTempTab') {
 			const replId = (customEvent.session.configuration as any).replId;
 			if (replId) {
