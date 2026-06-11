@@ -4,65 +4,22 @@
 
 'use strict';
 
-import * as fs from 'fs';
 import * as vscode from 'vscode';
-import { WorkspaceFolder, DebugConfiguration, ProviderResult } from 'vscode';
-import { DyalogConnection, findConnectionsFile } from './debug/dyalogConnections';
 import { ReplManager } from './repl/replManager';
 import { ReplViewProvider } from './repl/replPanel';
 import { AplBacktickHandler } from './editor/aplBacktick';
 import { cleanTempDir } from './editor/editWindowManager';
-import { AplConfigurationProvider, InlineDebugAdapterFactory } from './debug/debugConfigProvider';
+import {
+	AplConfigurationProvider,
+	DyalogConnectionConfigProvider,
+	InlineDebugAdapterFactory,
+} from './debug/debugConfigProvider';
 import { registerCommands } from './commands';
 
 let aplStatusBarItem: vscode.StatusBarItem;
 
 export function updateStatusBar(text: string): void {
 	aplStatusBarItem.text = text;
-}
-
-/**
- * Read Dyalog connections and map them to VS Code debug configurations.
- */
-function getDyalogDebugConfigs(): DebugConfiguration[] {
-	const connFile = findConnectionsFile();
-	if (!connFile) {
-		return [];
-	}
-
-	try {
-		const raw = fs.readFileSync(connFile, 'utf8');
-		const connections: DyalogConnection[] = JSON.parse(raw);
-		const configs: DebugConfiguration[] = [];
-
-		for (const conn of connections) {
-			if (!conn.name) { continue; }
-
-			if (conn.type === 'start' && conn.exe) {
-				configs.push({
-					type: 'apl',
-					request: 'launch',
-					name: conn.name.trim(),
-					exe: conn.exe,
-					cwd: '${workspaceFolder}',
-					stopOnEntry: true,
-				});
-			} else if (conn.port) {
-				configs.push({
-					type: 'apl',
-					request: 'launch',
-					name: conn.name.trim(),
-					host: conn.host || '127.0.0.1',
-					port: parseInt(conn.port, 10),
-					cwd: '${workspaceFolder}',
-					stopOnEntry: true,
-				});
-			}
-		}
-		return configs;
-	} catch {
-		return [];
-	}
 }
 
 /**
@@ -104,25 +61,9 @@ export function activateExtension(context: vscode.ExtensionContext): { replManag
 	const provider = new AplConfigurationProvider();
 	context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('apl', provider));
 
-	// Register a configuration provider that discovers Dyalog connections.
-	// Initial: used when there's no launch.json (F5 shows a picker).
-	// Dynamic: configs appear in the debug dropdown alongside launch.json entries.
-	const dyalogConfigProvider = {
-		provideDebugConfigurations(_folder: WorkspaceFolder | undefined): ProviderResult<DebugConfiguration[]> {
-			const dyalogConfigs = getDyalogDebugConfigs();
-			if (dyalogConfigs.length > 0) {
-				return dyalogConfigs;
-			}
-			return [
-				{
-					name: "APL Launch",
-					request: "launch",
-					type: "apl",
-					cwd: "${workspaceFolder}"
-				}
-			];
-		}
-	};
+	// Surface saved Dyalog connections (connections.json) as initial and
+	// dynamic debug configurations in the F5 picker.
+	const dyalogConfigProvider = new DyalogConnectionConfigProvider();
 	context.subscriptions.push(
 		vscode.debug.registerDebugConfigurationProvider('apl', dyalogConfigProvider, vscode.DebugConfigurationProviderTriggerKind.Initial),
 		vscode.debug.registerDebugConfigurationProvider('apl', dyalogConfigProvider, vscode.DebugConfigurationProviderTriggerKind.Dynamic),

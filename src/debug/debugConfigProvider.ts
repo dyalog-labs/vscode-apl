@@ -1,14 +1,19 @@
+import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { WorkspaceFolder, DebugConfiguration, ProviderResult, CancellationToken } from 'vscode';
 import { AplDebugSession } from './aplDebug';
 import { FileAccessor } from './aplRuntime';
 import { ReplManager } from '../repl/replManager';
+import { DyalogConnection, findConnectionsFile } from './dyalogConnections';
 
 /**
  * Debug configuration plumbing for the `apl` debug type:
  *
  *  - `AplConfigurationProvider` fills in defaults on `launch.json` entries
  *    before the debug session starts.
+ *  - `DyalogConnectionConfigProvider` surfaces the user's saved
+ *    `connections.json` interpreter entries as initial / dynamic
+ *    debug configurations in the F5 picker.
  *  - `workspaceFileAccessor` adapts `vscode.workspace.fs` to the
  *    runtime's `FileAccessor` shape so `AplDebugSession` doesn't import
  *    `node:fs` directly.
@@ -72,6 +77,75 @@ export class AplConfigurationProvider implements vscode.DebugConfigurationProvid
 		}
 
 		return config;
+	}
+}
+
+/**
+ * Read Dyalog connections.json and map each entry to a VS Code
+ * `DebugConfiguration`. Returns an empty array if the file is missing
+ * or unparseable — callers fall back to a default config in that case.
+ */
+function getDyalogDebugConfigs(): DebugConfiguration[] {
+	const connFile = findConnectionsFile();
+	if (!connFile) {
+		return [];
+	}
+
+	try {
+		const raw = fs.readFileSync(connFile, 'utf8');
+		const connections: DyalogConnection[] = JSON.parse(raw);
+		const configs: DebugConfiguration[] = [];
+
+		for (const conn of connections) {
+			if (!conn.name) { continue; }
+
+			if (conn.type === 'start' && conn.exe) {
+				configs.push({
+					type: 'apl',
+					request: 'launch',
+					name: conn.name.trim(),
+					exe: conn.exe,
+					cwd: '${workspaceFolder}',
+					stopOnEntry: true,
+				});
+			} else if (conn.port) {
+				configs.push({
+					type: 'apl',
+					request: 'launch',
+					name: conn.name.trim(),
+					host: conn.host || '127.0.0.1',
+					port: parseInt(conn.port, 10),
+					cwd: '${workspaceFolder}',
+					stopOnEntry: true,
+				});
+			}
+		}
+		return configs;
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * Provides the initial / dynamic list of debug configurations in the F5
+ * picker, sourced from the user's Dyalog `connections.json`. Falls back
+ * to a single generic "APL Launch" entry when no connections are
+ * discoverable.
+ */
+export class DyalogConnectionConfigProvider implements vscode.DebugConfigurationProvider {
+	provideDebugConfigurations(_folder: WorkspaceFolder | undefined): ProviderResult<DebugConfiguration[]> {
+		const dyalogConfigs = getDyalogDebugConfigs();
+		if (dyalogConfigs.length > 0) {
+			return dyalogConfigs;
+		}
+		return [
+			{
+				name: "APL Launch",
+				request: "launch",
+				type: "apl",
+				cwd: "${workspaceFolder}",
+			},
+		];
 	}
 }
 
