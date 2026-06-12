@@ -27,6 +27,21 @@ Forked from and based on [vscode-apl-debug](https://github.com/tiamatica/vscode-
 - `Shift+Enter` go-to-definition and smart `Escape` behavior
 - `Ctrl+Up` to toggle localization of a variable in the function header
 
+### Eval Server (external tool integration)
+
+An opt-in TCP server that evaluates APL expressions in the active REPL session, so external tools (shell scripts, editors, other processes) can talk to your workspace.
+
+- Set `apl.evalServer.port` in settings (Ctrl+,) - the default `0` means disabled, then open the command palette (Ctrl+Shift+P) and run **APL: Start Eval Server**. The server never starts automatically, and **APL: Stop Eval Server** (or clicking the status bar item) shuts it down.
+- Protocol: one expression per line; each reply is text terminated by `\0`. Meta-commands: `/history`, `/tabs`, `/switch <id>`.
+- Listens on `127.0.0.1` only and rejects connections that look like HTTP requests or TLS handshakes, so browsers can't reach it — but be aware that any local process running as your user can.
+
+[bin/aple](bin/aple) is a ready-made client:
+
+```bash
+$ APL_EVAL_PORT=4502 bin/aple '2+2'   # port must match apl.evalServer.port
+4
+```
+
 ## Getting Started
 
 1. Build and install the extension locally (see [Build and Run](#build-and-run) below).
