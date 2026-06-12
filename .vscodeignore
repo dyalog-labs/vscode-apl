@@ -1,7 +1,5 @@
 .vscode/**/*
 .gitignore
-.travis.yml
-appveyor.yml
 src/**/*
 out/tests/**/*
 **/*.js.map
@@ -12,3 +10,6 @@ tsconfig.json
 out
 sampleWebWorkerWorkspace
 sampleWorkspace
+docs/*
+.claude/*
+.vscode-test.mjs
