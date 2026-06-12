@@ -13,12 +13,10 @@ import type {
 	AppendSessionOutputMessage, CloseWindowMessage, DisconnectMessage, EchoInputMessage,
 	GetHelpInformationMessage, GotoWindowMessage, HadErrorMessage, IdentifyMessage,
 	InterpreterStatusMessage, InternalErrorMessage, NotificationMessage, OpenWindowMessage,
-	OptionsDialogMessage, ReplyClearTraceStopMonitorMessage, ReplyFormatCodeMessage,
-	ReplyGetAutocompleteMessage, ReplyGetConfigurationMessage, ReplyGetHelpInformationMessage,
-	ReplyGetLanguageBarMessage, ReplyGetLogMessage, ReplyGetSIStackMessage,
-	ReplyGetSyntaxInformationMessage, ReplyGetThreadsMessage, ReplySaveChangesMessage,
+	ReplyGetAutocompleteMessage, ReplyGetHelpInformationMessage,
+	ReplyGetLogMessage, ReplyGetSIStackMessage, ReplySaveChangesMessage,
 	ReplyTreeListMessage, RideMessage, SetHighlightLineMessage, SetPromptTypeMessage,
-	ShowHTMLMessage, StatusOutputMessage, StringDialogMessage, SysErrorMessage,
+	ShowHTMLMessage, StatusOutputMessage, SysErrorMessage,
 	TaskDialogMessage, UnknownCommandMessage, UpdateDisplayNameMessage, ValueTipMessage,
 	WindowTypeChangedMessage,
 } from '../session/rideMessages';
@@ -260,24 +258,16 @@ export class AplRuntime extends EventEmitter {
 			case 'InvalidSyntax': this.invalidSyntax(); break;
 			case 'NotificationMessage': this.notificationMessage(rideMessage[1] as NotificationMessage); break;
 			case 'OpenWindow': this.openWindow(rideMessage[1] as OpenWindowMessage); break;
-			case 'OptionsDialog': this.optionsDialog(rideMessage[1] as OptionsDialogMessage); break;
-			case 'ReplyClearTraceStopMonitor': this.replyClearTraceStopMonitor(rideMessage[1] as ReplyClearTraceStopMonitorMessage); break;
-			case 'ReplyFormatCode': this.replyFormatCode(rideMessage[1] as ReplyFormatCodeMessage); break;
 			case 'ReplyGetAutocomplete': this.replyGetAutocomplete(rideMessage[1] as ReplyGetAutocompleteMessage); break;
-			case 'ReplyGetConfiguration': this.replyGetConfiguration(rideMessage[1] as ReplyGetConfigurationMessage); break;
 			case 'ReplyGetHelpInformation': this.replyGetHelpInformation(rideMessage[1] as ReplyGetHelpInformationMessage); break;
-			case 'ReplyGetLanguageBar': this.replyGetLanguageBar(rideMessage[1] as ReplyGetLanguageBarMessage); break;
 			case 'ReplyGetLog': this.replyGetLog(rideMessage[1] as ReplyGetLogMessage); break;
 			case 'ReplyGetSIStack': this.replyGetSIStack(rideMessage[1] as ReplyGetSIStackMessage); break;
-			case 'ReplyGetSyntaxInformation': this.replyGetSyntaxInformation(rideMessage[1] as ReplyGetSyntaxInformationMessage); break;
-			case 'ReplyGetThreads': this.replyGetThreads(rideMessage[1] as ReplyGetThreadsMessage); break;
 			case 'ReplySaveChanges': this.replySaveChanges(rideMessage[1] as ReplySaveChangesMessage); break;
 			case 'ReplyTreeList': this.replyTreeList(rideMessage[1] as ReplyTreeListMessage); break;
 			case 'ShowHTML': this.showHTML(rideMessage[1] as ShowHTMLMessage); break;
 			case 'SetHighlightLine': this.setHighlightLine(rideMessage[1] as SetHighlightLineMessage); break;
 			case 'SetPromptType': this.setPromptType(rideMessage[1] as SetPromptTypeMessage); break;
 			case 'StatusOutput': this.statusOutput(rideMessage[1] as StatusOutputMessage); break;
-			case 'StringDialog': this.stringDialog(rideMessage[1] as StringDialogMessage); break;
 			case 'SysError': this.sysError(rideMessage[1] as SysErrorMessage); break;
 			case 'TaskDialog': this.taskDialog(rideMessage[1] as TaskDialogMessage); break;
 			case 'UnknownCommand': this.unknownCommand(rideMessage[1] as UnknownCommandMessage); break;
@@ -285,6 +275,17 @@ export class AplRuntime extends EventEmitter {
 			case 'UpdateWindow': this.updateWindow(rideMessage[1] as OpenWindowMessage); break;
 			case 'ValueTip': this.valueTip(rideMessage[1] as ValueTipMessage); break;
 			case 'WindowTypeChanged': this.windowTypeChanged(rideMessage[1] as WindowTypeChangedMessage); break;
+			// RIDE editor features this extension does not implement; ignored
+			// rather than answered with UnknownCommand.
+			case 'OptionsDialog':
+			case 'ReplyClearTraceStopMonitor':
+			case 'ReplyFormatCode':
+			case 'ReplyGetConfiguration':
+			case 'ReplyGetLanguageBar':
+			case 'ReplyGetSyntaxInformation':
+			case 'ReplyGetThreads':
+			case 'StringDialog':
+				break;
 			default: this.send('UnknownCommand', { name: rideMessage[0] });
 		}
 	}
@@ -379,24 +380,6 @@ export class AplRuntime extends EventEmitter {
 		this.sendEvent("openHelp", x);
 	}
 
-	private replyGetLanguageBar(x: ReplyGetLanguageBarMessage) {
-		// const { entries } = x;
-		// D.lb.order = entries.map((k) => k.avchar || ' ').join('');
-		// entries.forEach((k) => {
-		// if (k.avchar) {
-		// 	D.lb.tips[k.avchar] = [
-		// 	`${k.name.slice(5)} (${k.avchar})`,
-		// 	k.helptext.join('\n'),
-		// 	];
-		// 	D.sqglDesc[k.avchar] = `${k.name.slice(5)} (${k.avchar})`;
-		// }
-		// });
-		// ide.lbarRecreate();
-	}
-	private replyGetSyntaxInformation(x: ReplyGetSyntaxInformationMessage) {
-		// D.ParseSyntaxInformation(x);
-		// D.ipc && D.ipc.server.broadcast('syntax', D.syntax);
-	}
 	private valueTip(x: ValueTipMessage) {
 		this.log('getValueTip');
 		this._valueTip.resolve(x.token, x);
@@ -485,24 +468,8 @@ export class AplRuntime extends EventEmitter {
 	private showHTML(x: ShowHTMLMessage) {
 		this.sendEvent('openWebview', x);
 	}
-	private optionsDialog(x: OptionsDialogMessage) {
-		// D.util.optionsDialog(x, (r) => {
-		// D.send('ReplyOptionsDialog', { index: r, token: x.token });
-		// });
-	}
-	private stringDialog(x: StringDialogMessage) {
-		// D.util.stringDialog(x, (r) => {
-		// D.send('ReplyStringDialog', { value: r, token: x.token });
-		// });
-	}
 	private taskDialog(x: TaskDialogMessage) {
 		this.sendEvent('taskDialog', x);
-	}
-	private replyClearTraceStopMonitor(x: ReplyClearTraceStopMonitorMessage) {
-		// $.alert(`The following items were cleared:
-		// ${x.traces} traces
-		// ${x.stops} stops
-		// ${x.monitors} monitors`, 'Clear all trace/stop/monitor');
 	}
 	/** Look up the temp file for a function name from open debug windows.
 	 *  Stack descriptions use fully-qualified names (#.goo) while
@@ -536,25 +503,8 @@ export class AplRuntime extends EventEmitter {
 			count: x.stack.length
 		});
 	}
-	private replyGetThreads(x: ReplyGetThreadsMessage) {
-		// const l = x.threads.length;
-		// I.sb_threads.innerText = `&: ${l}`;
-		// I.sb_threads.classList.toggle('active', l > 1);
-		// ide.dbg && ide.dbg.threads.render(x.threads);
-	}
 	private interpreterStatus(x: InterpreterStatusMessage) {
 		this.sendEvent('dyalogStatus', x);
-	}
-	private replyFormatCode(x: ReplyFormatCodeMessage) {
-		// const w = D.wins[x.win];
-		// w.ReplyFormatCode(x.text);
-		// ide.hadErr > 0 && (ide.hadErr -= 1);
-		// ide.focusWin(w);
-	}
-	private replyGetConfiguration(x: ReplyGetConfigurationMessage) {
-		// x.configurations.forEach((c) => {
-		// 	if (c.name === 'AUTO_PAUSE_THREADS') D.prf.pauseOnError(c.value === '1');
-		// });
 	}
 	private replyTreeList(x: ReplyTreeListMessage) {
 		this._treelist.resolve(x.nodeId, x);
