@@ -76,10 +76,57 @@ export function activateAplDebug(context: vscode.ExtensionContext) {
 	aplStatusBarItem.show();
 	// aplStatusBarItem.command = myCommandId;
 
-	// Initialize the REPL manager (multi-tab REPL support)
+	// Initialize the REPL manager (multi-tab REPL support).
+	// The eval server is NOT auto-started — the user explicitly enables it
+	// per window via `APL: Start Eval Server`.
 	const replManager = ReplManager.getInstance();
 	replManager.initialize(context);
 	context.subscriptions.push(replManager);
+
+	// Eval-server status bar item: visible only while the server is running.
+	const evalServerStatusItem = vscode.window.createStatusBarItem(
+		vscode.StatusBarAlignment.Right, 99,
+	);
+	evalServerStatusItem.command = 'apl.evalServer.stop';
+	context.subscriptions.push(evalServerStatusItem);
+
+	const setEvalServerRunning = (running: boolean, port?: number) => {
+		vscode.commands.executeCommand('setContext', 'apl.evalServer.running', running);
+		if (running && port !== undefined) {
+			evalServerStatusItem.text = `$(broadcast) APL Eval :${port}`;
+			evalServerStatusItem.tooltip = `APL eval server listening on 127.0.0.1:${port}. Click to stop.`;
+			evalServerStatusItem.show();
+		} else {
+			evalServerStatusItem.hide();
+		}
+	};
+	setEvalServerRunning(false);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('apl.evalServer.start', async () => {
+			try {
+				const port = await replManager.startEvalServer();
+				setEvalServerRunning(true, port);
+				vscode.window.showInformationMessage(
+					`APL eval server started on 127.0.0.1:${port}`,
+				);
+			} catch (e) {
+				setEvalServerRunning(false);
+				vscode.window.showErrorMessage(
+					`Failed to start APL eval server: ${(e as Error).message}`,
+				);
+			}
+		}),
+		vscode.commands.registerCommand('apl.evalServer.stop', async () => {
+			if (!replManager.isEvalServerRunning()) {
+				vscode.window.showInformationMessage('APL eval server is not running.');
+				return;
+			}
+			await replManager.stopEvalServer();
+			setEvalServerRunning(false);
+			vscode.window.showInformationMessage('APL eval server stopped.');
+		}),
+	);
 
 	// Register the REPL view provider for bottom panel
 	const replProvider = new ReplViewProvider(context.extensionUri, replManager, context);

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# aple — client for the vscode-apl eval server
+#
+# Usage: aple <expression>
+#
+# Optional env:
+#   APL_EVAL_PORT — TCP port (default: 4502; must match
+#                   `apl.evalServer.port` in VS Code settings)
+#
+# The server listens on 127.0.0.1 only, and rejects any connection whose
+# first bytes look like an HTTP request or TLS handshake — so browsers
+# can't reach it, but any local process running as you can.
+
+set -u
+
+PORT="${APL_EVAL_PORT:-4502}"
+
+if [ -z "${1:-}" ]; then
+  echo "Usage: aple <expression>" >&2
+  exit 1
+fi
+
+exec 3<>/dev/tcp/127.0.0.1/"$PORT"
+printf '%s\n' "$1" >&3
+IFS= read -r -d $'\0' reply <&3 || true
+printf '%s' "$reply"
+exec 3>&-
