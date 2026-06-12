@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as Path from 'path';
 import type { AplSession } from '../session/aplSession';
 import type { CloseWindowMessage, GotoWindowMessage, OpenWindowMessage, ReplySaveChangesMessage } from '../session/rideMessages';
-import { TEMP_DIR } from './tempFiles';
+import { TEMP_DIR, tempFilePath } from './tempFiles';
 
 interface EditWindowEntry {
 	uri: vscode.Uri;
@@ -175,14 +175,12 @@ export class EditWindowManager implements vscode.Disposable {
 		if (resolved && fs.existsSync(resolved)) {
 			uri = vscode.Uri.file(resolved);
 		} else {
-			// Per-REPL subdir, no token in the filename — same layout that
-			// aplRuntime uses for tracer temp files, so paths stay stable
-			// across sessions and don't collide across REPLs.
-			const replDir = Path.join(TEMP_DIR, this._replId);
-			fs.mkdirSync(replDir, { recursive: true });
-
-			const safeName = name.replace(/[⎕#./\\:*?"<>|]/g, '_');
-			const filepath = Path.join(replDir, `${safeName}.apl`);
+			// Per-identifier subdir so case-variant names (`M` vs `m`) get
+			// distinct paths on case-insensitive filesystems. Same layout
+			// is used by aplRuntime for tracer temp files, so paths stay
+			// stable across edit-window / tracer contexts.
+			const filepath = tempFilePath(this._replId, name, 'apl');
+			fs.mkdirSync(Path.dirname(filepath), { recursive: true });
 			fs.writeFileSync(filepath, content, 'utf-8');
 
 			uri = vscode.Uri.file(filepath);
