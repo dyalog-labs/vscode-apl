@@ -1,10 +1,10 @@
 import * as vscode from 'vscode';
-import { AplSession, ConnectionState } from './aplSession';
-import { EditWindowManager } from './editWindowManager';
-import { ReplManager } from './replManager';
+import type { AplSession, ConnectionState } from '../session/aplSession';
+import { EditWindowManager } from '../editor/editWindowManager';
+import type { ReplManager } from './replManager';
 import { ReplBreakpointSync } from './replBreakpointSync';
-import { updateStatusBar } from './activateAplDebug';
-import { openAplDefinition, isValidNamespace, injectCSP } from './utils';
+import { updateStatusBar } from '../statusBar';
+import { openAplDefinition, isValidNamespace, injectCSP } from '../utils';
 
 /**
  * A single REPL tab: owns an AplSession and accumulates output history.

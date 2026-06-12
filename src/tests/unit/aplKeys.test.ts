@@ -1,5 +1,5 @@
 import assert = require('assert');
-import { APL_KEYS, buildAplKeyMap, getAplKeysForWebview } from '../../aplKeys';
+import { APL_KEYS, buildAplKeyMap, getAplKeysForWebview } from '../../editor/aplKeys';
 
 suite('APL_KEYS data', () => {
 	test('every entry has key and char fields', () => {

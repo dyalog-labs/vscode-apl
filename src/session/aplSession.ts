@@ -5,7 +5,7 @@ import * as Net from 'net';
 import * as os from 'os';
 import * as Path from 'path';
 import * as vscode from 'vscode';
-import { findDyalogExe } from './findDyalog';
+import { findDyalogExe } from './findDyalogExe';
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'busy';
 

@@ -1,38 +1,5 @@
 import assert = require('assert');
-
-/**
- * Extracted pure-function version of AplDebugSession.parseLocalNames
- * for testability. The original is a private method in aplDebug.ts.
- */
-function parseLocalNames(headerLine: string, funcName: string): string[] {
-	if (!headerLine || !funcName) { return []; }
-
-	// Dfn: first line starts with { but is NOT a tradfn with optional result {Z}←
-	// In {Z}←FuncName, the } comes before ←. In a dfn like {foo←⍺+5}, ← is inside the braces.
-	const trimmed = headerLine.trimStart();
-	if (trimmed.startsWith('{') && !/^\s*\{[^}]*\}\s*←/.test(trimmed)) {
-		return ['⍵', '⍺'];
-	}
-
-	// Tradfn header: {Z←} {A} FuncName {B} {;loc1} {;loc2} ...
-	const parts = headerLine.split(';');
-	const declaredLocals = parts.slice(1).map(s => s.trim()).filter(s => s.length > 0);
-
-	const sig = parts[0];
-	const tokens = sig
-		.replace(/[{}]/g, '')       // Remove optional-arg braces
-		.split(/[←\s]+/)            // Split by ← and whitespace
-		.map(s => s.trim())
-		.filter(s => s.length > 0);
-
-	const names: string[] = [];
-	for (const token of tokens) {
-		if (token === funcName) { continue; } // Skip function name
-		names.push(token);
-	}
-
-	return [...names, ...declaredLocals];
-}
+import { parseLocalNames } from '../../debug/inspect';
 
 suite('parseLocalNames', () => {
 	test('dfn header returns ⍵ and ⍺', () => {

@@ -14,10 +14,11 @@ import * as vscode from 'vscode';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import { basename } from 'path-browserify';
 import { AplRuntime, IAplBreakpoint, FileAccessor } from './aplRuntime';
-import { ReplManager } from './replManager';
-import type { InterpreterStatusMessage, OpenWindowMessage, ReplyGetHelpInformationMessage, ShowHTMLMessage, ValueTipMessage } from './rideMessages';
+import { classMap, parseLocalNames } from './inspect';
+import { ReplManager } from '../repl/replManager';
+import type { InterpreterStatusMessage, OpenWindowMessage, ReplyGetHelpInformationMessage, ShowHTMLMessage, ValueTipMessage } from '../session/rideMessages';
 import { Subject } from 'await-notify';
-import { injectCSP } from './utils';
+import { injectCSP } from '../utils';
 
 // function timeout(ms: number) {
 // 	return new Promise(resolve => setTimeout(resolve, ms));
@@ -382,7 +383,7 @@ export class AplDebugSession extends LoggingDebugSession {
 		// Show Local scope for the top frame when inside a function
 		const topFrame = this._cachedFrames[0];
 		if (args.frameId === 0 && topFrame?.name) {
-			this._currentLocalNames = new Set(this.parseLocalNames());
+			this._currentLocalNames = new Set(this.currentLocalNames());
 			scopes.push(new Scope("Local", this._variableHandles.create("local"), false));
 		} else {
 			this._currentLocalNames = new Set();
@@ -394,78 +395,16 @@ export class AplDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
-	private classMap(nc: number): string {
-		switch (nc) {
-			case 2.1:
-			case 2.2:
-			case 2.6:
-				return 'data'; break;
-
-			case 2.3:
-				return 'property'; break;
-
-			case 3.1:
-			case 3.2:
-			case 3.3:
-			case 3.6:
-			case 4.1:
-			case 4.2:
-			case 4.3:
-				return 'method'; break;
-
-			case -1:
-			case 9.1:
-			case 9.2:
-			case 9.4:
-			case 9.6:
-				return 'class'; break;
-
-			case 9.5:
-			case 9.7:
-				return 'interface'; break;
-
-			default: return 'virtual';
-		}
-	}
-
 	private _varMap: Record<number, number> = {};
 
 	/**
-	 * Parse local variable names from the current function header.
-	 * For tradfn: extracts result, arguments, and declared locals from the header line.
-	 * For dfn: returns ⍵ and ⍺ as potential locals.
+	 * Parse local variable names from the current trace window's
+	 * function header. See `parseLocalNames` in inspect.ts.
 	 */
-	private parseLocalNames(): string[] {
+	private currentLocalNames(): string[] {
 		const win = this._runtime.currentWindow;
 		if (!win?.text?.length || !win.name) { return []; }
-
-		const header = win.text[0];
-
-		// A dfn starts with { but tradfns can start with result as {Z}← in eg {Z}←FuncName.
-		// Current heuristic is looking for {...}←
-		const trimmed = header.trimStart();
-		if (trimmed.startsWith('{') && !/^\s*\{[^}]*\}\s*←/.test(trimmed)) {
-			return ['⍵', '⍺'];
-		}
-
-		// Tradfn header: {Z←} {A} FuncName {B} {;loc1} {;loc2} ...
-		const parts = header.split(';');
-		const declaredLocals = parts.slice(1).map(s => s.trim()).filter(s => s.length > 0);
-
-		const sig = parts[0];
-		const tokens = sig
-			.replace(/[{}]/g, '')       // Remove optional-arg braces
-			.split(/[←\s]+/)            // Split by ← and whitespace
-			.map(s => s.trim())
-			.filter(s => s.length > 0);
-
-		const names: string[] = [];
-		for (const token of tokens) {
-			if (token === win.name) { continue; } // Skip function name
-			names.push(token);
-		}
-
-		return [...names, ...declaredLocals];
+		return parseLocalNames(win.text[0], win.name);
 	}
 
 	protected async variablesRequest(response: DebugProtocol.VariablesResponse, args: DebugProtocol.VariablesArguments, request?: DebugProtocol.Request) {
@@ -501,7 +440,7 @@ export class AplDebugSession extends LoggingDebugSession {
 		const vars = treenode.names.map(async (name, index) => {
 			// Filter out local variable names from the root namespace
 			if (filterLocals && this._currentLocalNames.has(name.trim())) { return null; }
-			const kind = this.classMap(treenode.classes[index]);
+			const kind = classMap(treenode.classes[index]);
 			const evaluateName = parentNodeId === 0 ? name : `${parent}.${name}`;
 			const debugVar = {
 				name,
@@ -578,7 +517,7 @@ export class AplDebugSession extends LoggingDebugSession {
 			const column = 0;
 			const valueTip = await this._runtime.getValueTip(args.expression, column, token, win);
 			if (valueTip && valueTip.tip) {
-				const kind = this.classMap(valueTip.class);
+				const kind = classMap(valueTip.class);
 				response.body.result = valueTip.tip.join('\n');
 				response.body.type = kind;
 				response.body.presentationHint = { kind };

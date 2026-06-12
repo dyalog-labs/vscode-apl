@@ -1,8 +1,8 @@
 import assert = require('assert');
 import Path = require('path');
-import { AplRuntime, FileAccessor } from '../../aplRuntime';
-import { AplSession } from '../../aplSession';
-import { AplDebugSession } from '../../aplDebug';
+import { AplRuntime, FileAccessor } from '../../debug/aplRuntime';
+import { AplSession } from '../../session/aplSession';
+import { AplDebugSession } from '../../debug/aplDebug';
 import { MockRideServer } from '../helpers/mockRideServer';
 import { seedLinkInfo } from '../helpers/sessionTestUtils';
 import { normPath } from '../../utils';

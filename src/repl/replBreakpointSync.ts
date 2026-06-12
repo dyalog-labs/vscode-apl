@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
-import { AplSession, LinkInfoRow } from './aplSession';
-import { normPath } from './utils';
+import type { AplSession } from '../session/aplSession';
+import { mapBreakpointsToStops } from '../session/linkBreakpoints';
+import { normPath } from '../utils';
 
 /**
  * Syncs VS Code breakpoints to the Dyalog interpreter when a REPL
@@ -108,23 +109,11 @@ export class ReplBreakpointSync implements vscode.Disposable {
 				&& normPath(bp.location.uri.fsPath) === normalizedPath
 		) as vscode.SourceBreakpoint[];
 
-		// Group breakpoint lines by APL function name
-		const fnbp: Record<string, number[]> = {};
-		for (const bp of vscBps) {
-			const line = bp.location.range.start.line; // 0-based
-			// Find the closest preceding function (largest startLine <= line)
-			let row: LinkInfoRow | undefined;
-			for (const r of linkInfo) {
-				if (normPath(r.filePath) === normalizedPath && r.startLine <= line) {
-					if (!row || r.startLine > row.startLine) { row = r; }
-				}
-			}
-			if (row) {
-				const lines = fnbp[row.aplName] || [];
-				lines.push(line - row.startLine);
-				fnbp[row.aplName] = lines;
-			}
-		}
+		const { stops } = mapBreakpointsToStops(
+			vscBps.map(bp => ({ line: bp.location.range.start.line, bp })),
+			filePath,
+			linkInfo,
+		);
 
 		// Find all APL functions mapped to this file
 		const allFunctions = new Set(
@@ -136,14 +125,14 @@ export class ReplBreakpointSync implements vscode.Disposable {
 		// Clear stops on functions that no longer have breakpoints
 		// Use error guard (0::⍬) to skip non-stoppable items (namespaces, classes)
 		for (const aplName of allFunctions) {
-			if (!fnbp[aplName]) {
+			if (!stops[aplName]) {
 				this._session.execute(`{0::⍬ ⋄ ⍬ ⎕STOP ⍵}'${aplName}'`);
 			}
 		}
 
 		// Set stops on functions that have breakpoints
-		for (const aplName of Object.keys(fnbp)) {
-			const lines = fnbp[aplName].join(' ');
+		for (const aplName of Object.keys(stops)) {
+			const lines = stops[aplName].join(' ');
 			this._session.execute(`{0::⍬ ⋄ ${lines} ⎕STOP ⍵}'${aplName}'`);
 		}
 	}

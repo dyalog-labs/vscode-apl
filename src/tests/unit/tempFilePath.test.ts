@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import * as Path from 'path';
-import { tempFilePath, caseTag, TEMP_DIR } from '../../editWindowManager';
+import { tempFilePath, caseTag, TEMP_DIR } from '../../editor/tempFiles';
 
 /**
  * The edit-window and debug-tracer paths used to be derived directly from

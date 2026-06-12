@@ -1,4 +1,4 @@
-import { AplSession, LinkInfoRow } from '../../aplSession';
+import { AplSession, LinkInfoRow } from '../../session/aplSession';
 
 /**
  * Seed an `AplSession`'s Link cache directly, bypassing the 5177⌶

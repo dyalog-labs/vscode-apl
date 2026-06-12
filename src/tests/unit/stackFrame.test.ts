@@ -1,5 +1,5 @@
 import assert = require('assert');
-import { parseStackDescription } from '../../aplRuntime';
+import { parseStackDescription } from '../../debug/aplRuntime';
 
 suite('parseStackDescription', () => {
 

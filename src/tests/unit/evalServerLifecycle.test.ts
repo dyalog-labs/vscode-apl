@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import * as Net from 'net';
 import * as vscode from 'vscode';
-import { ReplManager } from '../../replManager';
+import { ReplManager } from '../../repl/replManager';
 
 /**
  * Tests for the command-driven eval-server lifecycle on `ReplManager`.

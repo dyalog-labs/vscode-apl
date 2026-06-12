@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import * as Net from 'net';
 import { EventEmitter } from 'events';
-import { EvalServer } from '../../evalServer';
+import { EvalServer } from '../../repl/evalServer';
 
 /**
  * Tests for the TCP eval server.

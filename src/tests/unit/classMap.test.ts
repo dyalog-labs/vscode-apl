@@ -1,42 +1,5 @@
 import assert = require('assert');
-
-/**
- * Extracted pure-function version of AplDebugSession.classMap
- * for testability. The original is a private method in aplDebug.ts.
- */
-function classMap(nc: number): string {
-	switch (nc) {
-		case 2.1:
-		case 2.2:
-		case 2.6:
-			return 'data';
-
-		case 2.3:
-			return 'property';
-
-		case 3.1:
-		case 3.2:
-		case 3.3:
-		case 3.6:
-		case 4.1:
-		case 4.2:
-		case 4.3:
-			return 'method';
-
-		case -1:
-		case 9.1:
-		case 9.2:
-		case 9.4:
-		case 9.6:
-			return 'class';
-
-		case 9.5:
-		case 9.7:
-			return 'interface';
-
-		default: return 'virtual';
-	}
-}
+import { classMap } from '../../debug/inspect';
 
 suite('classMap', () => {
 	test('data types', () => {

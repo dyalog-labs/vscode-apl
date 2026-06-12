@@ -1,5 +1,5 @@
 import assert = require('assert');
-import { AplSession } from '../../aplSession';
+import { AplSession } from '../../session/aplSession';
 import { MockRideServer } from '../helpers/mockRideServer';
 
 suite('AplSession — connection lifecycle', () => {

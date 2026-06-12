@@ -2,7 +2,7 @@ import assert = require('assert');
 import * as fs from 'fs';
 import * as os from 'os';
 import * as Path from 'path';
-import { AplSession } from '../../aplSession';
+import { AplSession } from '../../session/aplSession';
 import { MockRideServer } from '../helpers/mockRideServer';
 import { seedLinkInfo } from '../helpers/sessionTestUtils';
 
