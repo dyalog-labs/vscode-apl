@@ -43,6 +43,14 @@
 		// Set up event listeners
 		inputEl.addEventListener('keydown', handleKeyDown);
 		inputEl.addEventListener('input', handleInput);
+		// If the input loses focus mid reverse-search, the key handler can no
+		// longer fire and the (invisible, pointer-events:none) input would be
+		// stuck. Restore it on blur so focus can always be recovered.
+		inputEl.addEventListener('blur', function() {
+			if (reverseSearchActive) {
+				exitReverseSearch(false, false);
+			}
+		});
 		connectBtn.addEventListener('click', handleConnect);
 		clearBtn.addEventListener('click', handleClear);
 		interruptBtn.addEventListener('click', handleInterrupt);
@@ -437,9 +445,10 @@
 		inputEl.focus();
 	}
 
-	function exitReverseSearch(accept) {
+	function exitReverseSearch(accept, refocus) {
 		if (!reverseSearchActive) return;
 		reverseSearchActive = false;
+		if (refocus === undefined) refocus = true;
 
 		// If accepting, put the matched text into the input
 		if (accept && reverseSearchMatchIndex >= 0 && reverseSearchMatchIndex < inputHistory.length) {
@@ -459,7 +468,7 @@
 		inputEl.style.opacity = '';
 		inputEl.style.position = '';
 		inputEl.style.pointerEvents = '';
-		inputEl.focus();
+		if (refocus) inputEl.focus();
 
 		historyIndex = -1;
 		currentInput = '';
