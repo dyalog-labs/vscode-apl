@@ -6,7 +6,7 @@ import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as Path from 'path';
 import { AplSession, LinkInfoRow } from './aplSession';
-import { TEMP_DIR } from './editWindowManager';
+import { TEMP_DIR, tempFilePath } from './editWindowManager';
 import { normPath, PendingRequest, PendingRequests } from './utils';
 import type {
 	AppendSessionOutputMessage, CloseWindowMessage, DisconnectMessage, EchoInputMessage,
@@ -452,16 +452,13 @@ export class AplRuntime extends EventEmitter {
 	private openWindow(x: OpenWindowMessage) {
 		// When no file is associated (no Link), create a temp file from
 		// the function source so VS Code can display it in the editor.
-		// Use a per-REPL subdir so the filename stays stable across debug
-		// sessions (VS Code persists breakpoints by file path).  No
-		// cross-REPL collision because each REPL gets its own subdir.
+		// Per-identifier subdir so case-variant names get distinct paths
+		// on case-insensitive filesystems; layout is shared with
+		// EditWindowManager so the same name lands at the same path
+		// across edit / tracer contexts.
 		if (!x.filename && x.text?.length) {
-			const replDir = Path.join(TEMP_DIR, this._replId);
-			if (!fs.existsSync(replDir)) {
-				fs.mkdirSync(replDir, { recursive: true });
-			}
-			const safeName = x.name.replace(/[⎕#./\\:*?"<>|]/g, '_');
-			const tmpFile = Path.join(replDir, `${safeName}.aplf`);
+			const tmpFile = tempFilePath(this._replId, x.name, 'aplf');
+			fs.mkdirSync(Path.dirname(tmpFile), { recursive: true });
 			fs.writeFileSync(tmpFile, x.text.join('\n'), 'utf8');
 			x.filename = tmpFile;
 
