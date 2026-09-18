@@ -17,6 +17,16 @@ import type { DebugBridge } from '../repl/evalServer';
 export class VsCodeDebugBridge extends EventEmitter implements DebugBridge {
 	private _session?: vscode.DebugSession;
 	private _disposables: vscode.Disposable[] = [];
+	/** How long setBreakpoints waits for adapter propagation before
+	 *  falling back to the optimistic reply. Tests shrink this. */
+	public propagationTimeoutMs = 2000;
+	/** In-flight setBreakpoints barrier (at most one). */
+	private _bpWaiter?: {
+		path: string;
+		seq?: number;
+		settled: boolean;
+		settle: (body?: unknown) => void;
+	};
 
 	constructor() {
 		super();
@@ -37,12 +47,31 @@ export class VsCodeDebugBridge extends EventEmitter implements DebugBridge {
 					// onDidStartDebugSession may fire after early DAP events.
 					if (!this._session) { this._session = session; }
 					return {
+						onWillReceiveMessage: (msg: any) => {
+							// VS Code propagating our model change: this is the
+							// setBreakpoints request for the waited-on file —
+							// remember its seq to match the response below.
+							if (session !== this._session) { return; }
+							const w = this._bpWaiter;
+							if (w && w.seq === undefined
+								&& msg?.type === 'request' && msg.command === 'setBreakpoints'
+								&& msg.arguments?.source?.path
+								&& vscode.Uri.file(msg.arguments.source.path).fsPath === w.path) {
+								w.seq = msg.seq;
+							}
+						},
 						onDidSendMessage: (msg: any) => {
 							// Only the tracked session's events may reach
 							// listeners: requests target _session, and mixing
 							// in another session's stopped/terminated events
 							// would have clients stepping the wrong session.
 							if (session !== this._session) { return; }
+							const w = this._bpWaiter;
+							if (w && w.seq !== undefined
+								&& msg?.type === 'response' && msg.command === 'setBreakpoints'
+								&& msg.request_seq === w.seq) {
+								w.settle(msg.body);
+							}
 							if (msg?.type === 'event') { this.emit('dap', msg); }
 						},
 					};
@@ -87,9 +116,12 @@ export class VsCodeDebugBridge extends EventEmitter implements DebugBridge {
 	 * Breakpoints panel, post-debug ⎕STOP sync) kept the old ones, and
 	 * the next gutter edit or sync would silently revert the change.
 	 * Instead update VS Code's model — VS Code then sends the adapter a
-	 * proper setBreakpoints itself. The reply acknowledges the accepted
-	 * lines; adapter verification arrives asynchronously as breakpoint
-	 * events on `/debug listen`.
+	 * proper setBreakpoints itself. The reply is held until the tracker
+	 * observes the adapter's response to that propagation and carries its
+	 * authoritative body (verified flags, breakpoint ids), so a client may
+	 * `continue` immediately after. If nothing arrives within
+	 * `propagationTimeoutMs` (adapter gone, change coalesced away) the
+	 * optimistic accepted-lines reply is returned instead of hanging.
 	 */
 	private setBreakpointsViaModel(args: { source?: { path?: string }; breakpoints?: Array<{ line: number }> }): unknown {
 		const path = args?.source?.path;
@@ -110,13 +142,45 @@ export class VsCodeDebugBridge extends EventEmitter implements DebugBridge {
 
 		const existing = vscode.debug.breakpoints.filter(bp =>
 			bp instanceof vscode.SourceBreakpoint && bp.location.uri.fsPath === uri.fsPath);
+
+		// Nothing to change → VS Code sends the adapter nothing; waiting
+		// would only burn the timeout.
+		if (existing.length === 0 && additions.length === 0) {
+			return { breakpoints: [] };
+		}
+
+		const optimistic = { breakpoints: lines.map(line => ({ line, verified: false })) };
+
+		// One barrier at a time — a newcomer releases its predecessor.
+		this._bpWaiter?.settle(undefined);
+		const reply = new Promise<unknown>((resolve) => {
+			let timer: NodeJS.Timeout;
+			const waiter = {
+				path: uri.fsPath,
+				seq: undefined as number | undefined,
+				settled: false,
+				settle: (body?: unknown) => {
+					if (waiter.settled) { return; }
+					waiter.settled = true;
+					clearTimeout(timer);
+					if (this._bpWaiter === waiter) { this._bpWaiter = undefined; }
+					resolve(body ?? optimistic);
+				},
+			};
+			timer = setTimeout(() => waiter.settle(undefined), this.propagationTimeoutMs);
+			this._bpWaiter = waiter;
+		});
+
+		// Install the waiter BEFORE touching the model: propagation can be
+		// synchronous-ish and must not race past us.
 		if (existing.length > 0) { vscode.debug.removeBreakpoints(existing); }
 		if (additions.length > 0) { vscode.debug.addBreakpoints(additions); }
 
-		return { breakpoints: lines.map(line => ({ line, verified: false })) };
+		return reply;
 	}
 
 	public dispose(): void {
+		this._bpWaiter?.settle(undefined);
 		for (const d of this._disposables) { d.dispose(); }
 		this._disposables = [];
 		this.removeAllListeners();
