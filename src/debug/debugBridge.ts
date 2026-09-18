@@ -31,11 +31,22 @@ export class VsCodeDebugBridge extends EventEmitter implements DebugBridge {
 
 		this._disposables.push(
 			vscode.debug.registerDebugAdapterTrackerFactory('apl', {
-				createDebugAdapterTracker: () => ({
-					onDidSendMessage: (msg: any) => {
-						if (msg?.type === 'event') { this.emit('dap', msg); }
-					},
-				}),
+				createDebugAdapterTracker: (session: vscode.DebugSession) => {
+					// Adopt the first session to appear when none is tracked —
+					// covers /debug listen before any /debug start, where
+					// onDidStartDebugSession may fire after early DAP events.
+					if (!this._session) { this._session = session; }
+					return {
+						onDidSendMessage: (msg: any) => {
+							// Only the tracked session's events may reach
+							// listeners: requests target _session, and mixing
+							// in another session's stopped/terminated events
+							// would have clients stepping the wrong session.
+							if (session !== this._session) { return; }
+							if (msg?.type === 'event') { this.emit('dap', msg); }
+						},
+					};
+				},
 			}),
 			vscode.debug.onDidStartDebugSession((s) => {
 				if (s.type === 'apl' && !this._session) { this._session = s; }
@@ -85,15 +96,23 @@ export class VsCodeDebugBridge extends EventEmitter implements DebugBridge {
 		if (!path) { throw new Error('setBreakpoints requires source.path'); }
 		const uri = vscode.Uri.file(path);
 
+		// Validate and construct the full replacement BEFORE touching the
+		// model — clearing first would turn a malformed request into silent
+		// destruction of the user's breakpoints.
+		const specs = args.breakpoints ?? [];
+		if (!Array.isArray(specs)) { throw new Error('breakpoints must be an array'); }
+		const lines = specs.map(b => b?.line);
+		if (lines.some(l => typeof l !== 'number' || !Number.isInteger(l) || l < 1)) {
+			throw new Error('breakpoint lines must be integers >= 1');
+		}
+		const additions = lines.map(l => new vscode.SourceBreakpoint(
+			new vscode.Location(uri, new vscode.Position(l - 1, 0))));
+
 		const existing = vscode.debug.breakpoints.filter(bp =>
 			bp instanceof vscode.SourceBreakpoint && bp.location.uri.fsPath === uri.fsPath);
 		if (existing.length > 0) { vscode.debug.removeBreakpoints(existing); }
+		if (additions.length > 0) { vscode.debug.addBreakpoints(additions); }
 
-		const lines = (args.breakpoints ?? []).map(b => b.line);
-		if (lines.length > 0) {
-			vscode.debug.addBreakpoints(lines.map(l => new vscode.SourceBreakpoint(
-				new vscode.Location(uri, new vscode.Position(l - 1, 0)))));
-		}
 		return { breakpoints: lines.map(line => ({ line, verified: false })) };
 	}
 

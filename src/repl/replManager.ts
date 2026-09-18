@@ -46,6 +46,11 @@ export class ReplManager implements vscode.Disposable {
 		this._inputHistory = context.globalState.get<string[]>(
 			ReplManager.HISTORY_KEY, []
 		);
+		// The bridge must exist from activation: its DAP tracker only sees
+		// debug sessions created after registration, so a bridge created
+		// lazily with the eval server would stream no events from a debug
+		// session the user had already started.
+		this._debugBridge ??= new VsCodeDebugBridge();
 	}
 
 	/** Register a callback for when tabs are added/removed/switched. */

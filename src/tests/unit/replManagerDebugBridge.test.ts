@@ -20,6 +20,14 @@ suite('ReplManager — debug bridge lifecycle', () => {
 			.filter((f: { type: string }) => f.type === 'apl').length;
 	}
 
+	// Other suites (evalServerLifecycle) initialize the shared singleton;
+	// these tests need a virgin instance to observe the first initialize().
+	setup(() => { (ReplManager as any)._instance = undefined; });
+	teardown(() => {
+		ReplManager.getInstance().dispose();
+		(ReplManager as any)._instance = undefined;
+	});
+
 	const fakeContext: any = {
 		globalState: {
 			get: (_key: string, defaultValue: unknown) => defaultValue,

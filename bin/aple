@@ -62,8 +62,32 @@ trace() {
 
   finished() { [ "$(ask '≢⎕SI')" = "0" ]; }
 
+  # Every function whose ⎕STOP we touch gets its original setting recorded
+  # here (once, before the first touch) and restored on exit — a callee we
+  # stepped through must not keep trace stops, nor lose the breakpoints
+  # the user had on it before.
+  declare -A ORIG_STOPS
+
+  record_stops() {
+    if [ -z "${ORIG_STOPS[$1]+x}" ]; then
+      ORIG_STOPS[$1]="$(ask "⍕⎕STOP '$1'")"
+    fi
+  }
+
+  restore_stops() {
+    local fn
+    for fn in "${!ORIG_STOPS[@]}"; do
+      ask "(${ORIG_STOPS[$fn]:-⍬}) ⎕STOP '$fn'" > /dev/null
+    done
+  }
+
+  # ⎕STOP line numbers are always 1-based; ⍳ is not. The (1-⎕IO) offset
+  # keeps the generated lines correct whatever the workspace's ⎕IO.
+  all_lines() { printf '(1-⎕IO)+⍳¯1+≢⎕CR '\''%s'\''' "$1"; }
+
   # All-lines stops = tracing; explicit lines = classic breakpoints.
-  ask "(${BPS:-⍳¯1+≢⎕CR '$FN'}) ⎕STOP '$FN'" > /dev/null
+  record_stops "$FN"
+  ask "(${BPS:-$(all_lines "$FN")}) ⎕STOP '$FN'" > /dev/null
 
   echo "aple: tracing $FN  (s=step c=continue b=bt v=vars l=list q=quit, else APL)"
   ask "$FN"; echo
@@ -72,8 +96,25 @@ trace() {
     printf 'trace> '
     IFS= read -r cmd || break
     case "$cmd" in
-      s) ask "(⍳¯1+≢⎕CR ⊃⎕SI) ⎕STOP ⊃⎕SI ⋄ →⎕LC" ;;
-      c) ask "(${BPS:-⍬}) ⎕STOP ⊃⎕SI ⋄ →⎕LC" ;;
+      s)
+        cur="$(ask '⊃⎕SI')"
+        record_stops "$cur"
+        ask "($(all_lines "$cur")) ⎕STOP '$cur' ⋄ →⎕LC"
+        ;;
+      c)
+        # Leave the suspended function the way the user set it up: the
+        # traced function gets the requested breakpoints; a callee we
+        # instrumented gets its original stops back; anything else is
+        # not ours to touch.
+        cur="$(ask '⊃⎕SI')"
+        if [ "$cur" = "$FN" ]; then
+          ask "(${BPS:-⍬}) ⎕STOP '$FN' ⋄ →⎕LC"
+        elif [ -n "${ORIG_STOPS[$cur]+x}" ]; then
+          ask "(${ORIG_STOPS[$cur]:-⍬}) ⎕STOP '$cur' ⋄ →⎕LC"
+        else
+          ask '→⎕LC'
+        fi
+        ;;
       b) ask "↑⎕SI{⍺,'[',⍵,']'}¨⍕¨⎕LC" ;;
       v) ask "⍕⎕NL ¯2" ;;
       l) ask "(⎕VR ⊃⎕SI),(⎕UCS 10),'   at ',(⊃⎕SI),'[',(⍕⊃⎕LC),']'" ;;
@@ -84,7 +125,7 @@ trace() {
     echo
   done
 
-  ask "⍬ ⎕STOP '$FN'" > /dev/null
+  restore_stops
   if finished; then
     echo "aple: $FN finished"
   else
@@ -100,6 +141,13 @@ case "${1:-}" in
   --listen)
     exec 3<>/dev/tcp/127.0.0.1/"$PORT"
     printf '/debug listen\n' >&3
+    # Consume the subscription ack so stdout carries nothing but event
+    # JSON — `aple --listen | jq .` must not choke on the first line.
+    IFS= read -r -d $'\0' ack <&3 || exit 1
+    if [ "$ack" != "[Listening]" ]; then
+      echo "aple: subscription failed: $ack" >&2
+      exit 1
+    fi
     while IFS= read -r -d $'\0' msg <&3; do
       printf '%s\n' "$msg"
     done

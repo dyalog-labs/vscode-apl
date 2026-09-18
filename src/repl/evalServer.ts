@@ -10,8 +10,13 @@ import type { ReplManager } from './replManager';
  *
  * `/debug` meta-commands proxy into a real VS Code debug session through
  * an injected DebugBridge, so an external client can drive the debugger
- * while the user watches the native UI. Debug commands never enter the
- * eval FIFO — `pause` must reach the interpreter while an eval is stuck.
+ * while the user watches the native UI. Flow/inspection commands never
+ * enter the eval FIFO — `pause` must reach the interpreter while an eval
+ * is stuck. `evaluate`/`setExpression` DO join the FIFO: they run APL on
+ * the same interpreter, and interleaving them with a queued eval would
+ * attribute their output to the wrong client. Consequence: on a socket
+ * that mixes evals and flow commands, replies may interleave — flow
+ * replies are immediate while eval(-uate) replies wait for the queue.
  *
  * Browser drive-by defense: reject HTTP request lines (plaintext) and TLS
  * ClientHellos (first byte 0x16); drop sockets that send nothing within
@@ -43,6 +48,13 @@ const THREAD_DEFAULT_COMMANDS = new Set([
 	'next', 'continue', 'stepIn', 'stepOut', 'pause', 'stackTrace',
 ]);
 
+// DAP commands that execute APL on the shared interpreter. These must be
+// serialized through the eval FIFO — bypassing it lets a debug evaluation
+// run between two queued evals and its output leak into the queued
+// client's reply. `start` stays out of band: launching through the FIFO
+// could deadlock behind a stuck eval.
+const SERIALIZED_COMMANDS = new Set(['evaluate', 'setExpression']);
+
 // Known HTTP method + ` HTTP/<digit>` trailer. Both are required so a stray
 // APL call like `GET 1 2 3` or `FOO bar HTTP/1` won't false-match.
 const HTTP_REQUEST_LINE = /^(GET|POST|HEAD|OPTIONS|PUT|DELETE|PATCH|CONNECT|TRACE) \S+ HTTP\/\d/;
@@ -50,7 +62,10 @@ const TLS_HANDSHAKE_BYTE = 0x16;
 const PRE_DATA_TIMEOUT_MS = 2000;
 
 interface EvalRequest {
-	expr: string;
+	/** APL expression to run on the session (eval requests). */
+	expr?: string;
+	/** Deferred work holding the FIFO slot instead (serialized /debug). */
+	run?: () => Promise<void>;
 	socket: Net.Socket;
 }
 
@@ -198,6 +213,14 @@ export class EvalServer {
 				continue;
 			}
 			const req = this._queue.shift()!;
+			if (req.run) {
+				this._busy = true;
+				void req.run().then(() => {
+					this._busy = false;
+					this.dispatch();
+				});
+				return;
+			}
 			const session = this._manager.activeSession;
 			if (!session || !session.isConnected) {
 				try { req.socket.write('[No active session]\0'); } catch { /* */ }
@@ -227,7 +250,7 @@ export class EvalServer {
 			session.on('output', onOutput);
 			session.on('ready', onReady);
 			req.socket.once('close', onSocketClose);
-			session.execute(req.expr);
+			session.execute(req.expr!);
 			return;
 		}
 	}
@@ -347,13 +370,28 @@ export class EvalServer {
 				if (args === undefined && THREAD_DEFAULT_COMMANDS.has(sub)) {
 					args = { threadId: 1 };
 				}
-				try {
-					const result = await bridge.request(sub, args);
-					return JSON.stringify(result ?? {});
-				} catch (e: any) {
-					return `[Debug error: ${e.message}]`;
+				if (SERIALIZED_COMMANDS.has(sub)) {
+					// Hold the FIFO slot until the debug evaluation settles;
+					// the connection handler writes the reply when we resolve.
+					return new Promise<string>((resolve) => {
+						this._queue.push({
+							socket,
+							run: async () => resolve(await this.forwardDebugRequest(bridge, sub, args)),
+						});
+						this.dispatch();
+					});
 				}
+				return this.forwardDebugRequest(bridge, sub, args);
 			}
+		}
+	}
+
+	private async forwardDebugRequest(bridge: DebugBridge, command: string, args: unknown): Promise<string> {
+		try {
+			const result = await bridge.request(command, args);
+			return JSON.stringify(result ?? {});
+		} catch (e: any) {
+			return `[Debug error: ${e.message}]`;
 		}
 	}
 
@@ -364,7 +402,10 @@ export class EvalServer {
 	 */
 	private addDebugListener(socket: Net.Socket): void {
 		this._debugListeners.add(socket);
-		socket.once('close', () => this._debugListeners.delete(socket));
+		socket.once('close', () => {
+			this._debugListeners.delete(socket);
+			this.detachDapListenerIfIdle();
+		});
 
 		if (this._dapListener || !this._debugBridge) { return; }
 		this._dapListener = (msg: unknown) => {
@@ -376,7 +417,16 @@ export class EvalServer {
 				}
 				try { s.write(text); } catch { this._debugListeners.delete(s); }
 			}
+			this.detachDapListenerIfIdle();
 		};
 		this._debugBridge.on('dap', this._dapListener);
+	}
+
+	/** Drop the bridge subscription once nobody is listening. */
+	private detachDapListenerIfIdle(): void {
+		if (this._debugListeners.size === 0 && this._dapListener && this._debugBridge) {
+			this._debugBridge.removeListener('dap', this._dapListener);
+			this._dapListener = undefined;
+		}
 	}
 }
