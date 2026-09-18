@@ -74,16 +74,31 @@ trace() {
     fi
   }
 
+  # Idempotent: the normal exit path and the signal trap can both call it.
+  STOPS_RESTORED=0
   restore_stops() {
+    [ "$STOPS_RESTORED" = 1 ] && return
+    STOPS_RESTORED=1
     local fn
     for fn in "${!ORIG_STOPS[@]}"; do
       ask "(${ORIG_STOPS[$fn]:-⍬}) ⎕STOP '$fn'" > /dev/null
     done
   }
 
+  # Ctrl+C (or a kill) must not strand trace stops. The handler only flips a
+  # flag — it must NOT touch the socket: restoring ⎕STOP needs a request/reply
+  # round-trip, and a blocking read inside a signal handler is unreliable
+  # (EINTR). Setting the flag interrupts the pending `read`, so the loop breaks
+  # and restore_stops runs below in normal context, where the socket works.
+  INTERRUPTED=0
+  on_interrupt() { INTERRUPTED=1; }
+
   # ⎕STOP line numbers are always 1-based; ⍳ is not. The (1-⎕IO) offset
   # keeps the generated lines correct whatever the workspace's ⎕IO.
   all_lines() { printf '(1-⎕IO)+⍳¯1+≢⎕CR '\''%s'\''' "$1"; }
+
+  # Arm cleanup before the first stop is installed.
+  trap on_interrupt INT TERM
 
   # All-lines stops = tracing; explicit lines = classic breakpoints.
   record_stops "$FN"
@@ -93,8 +108,10 @@ trace() {
   ask "$FN"; echo
 
   while ! finished; do
+    [ "$INTERRUPTED" = 1 ] && break
     printf 'trace> '
     IFS= read -r cmd || break
+    [ "$INTERRUPTED" = 1 ] && break
     case "$cmd" in
       s)
         cur="$(ask '⊃⎕SI')"
@@ -125,8 +142,13 @@ trace() {
     echo
   done
 
+  trap - INT TERM
   restore_stops
-  if finished; then
+  if [ "$INTERRUPTED" = 1 ]; then
+    echo >&2
+    echo "aple: interrupted — trace stops restored (resume with: aple '→⎕LC', or aple ')reset')" >&2
+    exit 130
+  elif finished; then
     echo "aple: $FN finished"
   else
     echo "aple: quit while $(ask '⊃⎕SI') is still suspended — resume with: aple '→⎕LC'  (or aple ')reset')"
