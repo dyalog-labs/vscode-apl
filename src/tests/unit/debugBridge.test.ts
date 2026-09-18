@@ -143,6 +143,141 @@ suite('VsCodeDebugBridge', () => {
 	});
 
 	// ─────────────────────────────────────────────────────────────────────
+	// SETBREAKPOINTS COMPLETION BARRIER
+	//
+	// Updating VS Code's model returns before VS Code has forwarded the
+	// change to the adapter — a client that fires `setBreakpoints` then
+	// `continue` can resume on the OLD stops. The bridge must hold the
+	// reply until it observes the adapter's own setBreakpoints response
+	// for that file (the tracker sees both directions), and return that
+	// real body — verified flags and breakpoint ids included. If nothing
+	// arrives (adapter gone, VS Code coalesced the change away), fall
+	// back to the old optimistic reply after a timeout rather than hang.
+	// ─────────────────────────────────────────────────────────────────────
+
+	suite('setBreakpoints completion barrier', () => {
+		const FILE = '/ws/src/Foo.aplf';
+
+		function aplTracker(session: any) {
+			const entry = (vscode.debug as any).trackerFactories
+				.filter((f: any) => f.type === 'apl').pop();
+			return entry.factory.createDebugAdapterTracker(session);
+		}
+
+		function setup_(sessionOverrides: any = {}) {
+			const session = { type: 'apl', customRequest: async () => ({}), ...sessionOverrides };
+			(bridge as any)._session = session;
+			const tracker = aplTracker(session);
+			return { session, tracker };
+		}
+
+		test('reply is held until the adapter responds, then carries the real body', async () => {
+			const { tracker } = setup_();
+			const pending = bridge.request('setBreakpoints', {
+				source: { path: FILE },
+				breakpoints: [{ line: 2 }, { line: 5 }],
+			});
+
+			let settled = false;
+			void pending.then(() => { settled = true; });
+			await new Promise(r => setImmediate(r));
+			assert.strictEqual(settled, false, 'must not reply before the adapter has the stops');
+
+			// VS Code propagates the model change to the adapter…
+			tracker.onWillReceiveMessage({
+				type: 'request', seq: 7, command: 'setBreakpoints',
+				arguments: { source: { path: FILE } },
+			});
+			// …and the adapter answers with the authoritative result.
+			const body = { breakpoints: [
+				{ id: 1, line: 2, verified: true },
+				{ id: 2, line: 5, verified: false },
+			] };
+			tracker.onDidSendMessage({
+				type: 'response', request_seq: 7, command: 'setBreakpoints', success: true, body,
+			});
+
+			assert.deepStrictEqual(await pending, body, 'client must get the adapter result, not a guess');
+		});
+
+		test('unrelated adapter traffic does not release the reply', async () => {
+			const { tracker } = setup_();
+			(bridge as any).propagationTimeoutMs = 200;
+			const pending = bridge.request('setBreakpoints', {
+				source: { path: FILE },
+				breakpoints: [{ line: 3 }],
+			});
+
+			// A request for a DIFFERENT file, and a response to a DIFFERENT seq.
+			tracker.onWillReceiveMessage({
+				type: 'request', seq: 8, command: 'setBreakpoints',
+				arguments: { source: { path: '/ws/src/Bar.aplf' } },
+			});
+			tracker.onDidSendMessage({
+				type: 'response', request_seq: 99, command: 'setBreakpoints', success: true,
+				body: { breakpoints: [{ id: 9, line: 1, verified: true }] },
+			});
+			tracker.onDidSendMessage({
+				type: 'response', request_seq: 8, command: 'setBreakpoints', success: true,
+				body: { breakpoints: [{ id: 9, line: 1, verified: true }] },
+			});
+
+			// None of the above match our file → the timeout fallback fires.
+			const reply: any = await pending;
+			assert.deepStrictEqual(reply.breakpoints, [{ line: 3, verified: false }]);
+		});
+
+		test('falls back to the optimistic reply when the adapter never answers', async () => {
+			setup_();
+			(bridge as any).propagationTimeoutMs = 50;
+			const reply: any = await bridge.request('setBreakpoints', {
+				source: { path: FILE },
+				breakpoints: [{ line: 2 }],
+			});
+			assert.deepStrictEqual(reply.breakpoints, [{ line: 2, verified: false }]);
+		});
+
+		test("another session's setBreakpoints response does not settle the waiter", async () => {
+			const { tracker } = setup_();
+			(bridge as any).propagationTimeoutMs = 100;
+			const otherTracker = aplTracker({ type: 'apl' }); // NOT the tracked session
+			const pending = bridge.request('setBreakpoints', {
+				source: { path: FILE },
+				breakpoints: [{ line: 2 }],
+			});
+
+			otherTracker.onWillReceiveMessage({
+				type: 'request', seq: 3, command: 'setBreakpoints',
+				arguments: { source: { path: FILE } },
+			});
+			otherTracker.onDidSendMessage({
+				type: 'response', request_seq: 3, command: 'setBreakpoints', success: true,
+				body: { breakpoints: [{ id: 5, line: 2, verified: true }] },
+			});
+
+			const reply: any = await pending;
+			assert.deepStrictEqual(
+				reply.breakpoints, [{ line: 2, verified: false }],
+				'must time out rather than accept a foreign session\'s response',
+			);
+			// keep the real tracker referenced so linters don't flag it
+			void tracker;
+		});
+
+		test('clearing when nothing exists replies immediately (no VS Code traffic to wait for)', async () => {
+			setup_();
+			(bridge as any).propagationTimeoutMs = 5000; // would hang the test if waited on
+			const start = Date.now();
+			const reply: any = await bridge.request('setBreakpoints', {
+				source: { path: FILE },
+				breakpoints: [],
+			});
+			assert.deepStrictEqual(reply, { breakpoints: [] });
+			assert.ok(Date.now() - start < 1000, 'no-op must not wait for a propagation that will never come');
+		});
+	});
+
+	// ─────────────────────────────────────────────────────────────────────
 	// EVENT FILTERING BY SESSION
 	//
 	// The tracker factory sees every `apl` session. Events must only be
