@@ -8,11 +8,40 @@ import type { ReplManager } from './replManager';
  * each reply is text terminated by `\0`. A single FIFO queue serializes
  * requests so concurrent connections don't cross-contaminate output.
  *
+ * `/debug` meta-commands proxy into a real VS Code debug session through
+ * an injected DebugBridge, so an external client can drive the debugger
+ * while the user watches the native UI. Debug commands never enter the
+ * eval FIFO — `pause` must reach the interpreter while an eval is stuck.
+ *
  * Browser drive-by defense: reject HTTP request lines (plaintext) and TLS
  * ClientHellos (first byte 0x16); drop sockets that send nothing within
  * PRE_DATA_TIMEOUT_MS. Any local process running as the user can still
  * connect — same trust model as RIDE and the language server.
  */
+
+/**
+ * What the eval server needs from the debug side, kept vscode-free so
+ * the server stays unit-testable. The real implementation
+ * (`VsCodeDebugBridge`) wraps `vscode.debug` and emits `'dap'` for every
+ * DAP event the adapter sends.
+ */
+export interface DebugBridge {
+	isActive(): boolean;
+	start(config: Record<string, unknown>): Promise<boolean>;
+	stop(): Promise<void>;
+	request(command: string, args?: unknown): Promise<unknown>;
+	on(event: 'dap', listener: (msg: unknown) => void): unknown;
+	removeListener(event: 'dap', listener: (msg: unknown) => void): unknown;
+}
+
+const DEBUG_USAGE =
+	'[Usage: /debug start [json] | stop | status | listen | <dapCommand> [json]]';
+
+// Single-thread adapter (threadID hardcoded to 1), so flow commands can
+// default their args and stay one-word ergonomic from the CLI.
+const THREAD_DEFAULT_COMMANDS = new Set([
+	'next', 'continue', 'stepIn', 'stepOut', 'pause', 'stackTrace',
+]);
 
 // Known HTTP method + ` HTTP/<digit>` trailer. Both are required so a stray
 // APL call like `GET 1 2 3` or `FOO bar HTTP/1` won't false-match.
@@ -31,9 +60,16 @@ export class EvalServer {
 	private _queue: EvalRequest[] = [];
 	private _busy = false;
 	private _sockets: Set<Net.Socket> = new Set();
+	private _debugBridge?: DebugBridge;
+	private _debugListeners: Set<Net.Socket> = new Set();
+	private _dapListener?: (msg: unknown) => void;
+	// isActive() only flips once startDebugging resolves; this guards the
+	// window in between so concurrent /debug start can't double-launch.
+	private _debugStarting = false;
 
-	constructor(manager: ReplManager) {
+	constructor(manager: ReplManager, debugBridge?: DebugBridge) {
 		this._manager = manager;
+		this._debugBridge = debugBridge;
 	}
 
 	public async start(port: number): Promise<number> {
@@ -81,6 +117,11 @@ export class EvalServer {
 			});
 			console.log('[EvalServer] Stopped');
 		}
+		if (this._dapListener && this._debugBridge) {
+			this._debugBridge.removeListener('dap', this._dapListener);
+			this._dapListener = undefined;
+		}
+		this._debugListeners.clear();
 		this._queue = [];
 		this._busy = false;
 	}
@@ -128,6 +169,13 @@ export class EvalServer {
 				const expr = buf.slice(0, nl).replace(/\r$/, '');
 				buf = buf.slice(nl + 1);
 				if (!expr) { continue; }
+
+				if (expr === '/debug' || expr.startsWith('/debug ')) {
+					this.handleDebugCommand(expr, socket).then((reply) => {
+						try { socket.write(reply + '\0'); } catch { /* */ }
+					});
+					continue;
+				}
 
 				if (expr.startsWith('/')) {
 					try { socket.write(this.handleMetaCommand(expr) + '\0'); } catch { /* */ }
@@ -222,7 +270,113 @@ export class EvalServer {
 				return `Switched to ${tab.label}`;
 			}
 			default:
-				return `[Unknown command: /${cmd}]\nAvailable: /history, /tabs, /switch <id>`;
+				return `[Unknown command: /${cmd}]\nAvailable: /history, /tabs, /switch <id>, /debug`;
 		}
+	}
+
+	/**
+	 * `/debug <subcommand> [json]` — lifecycle commands are handled here;
+	 * anything unrecognized is forwarded to the adapter as a DAP request.
+	 * Always resolves to a reply string (errors are bracketed, results
+	 * are JSON) so the caller can write it unconditionally.
+	 */
+	private async handleDebugCommand(input: string, socket: Net.Socket): Promise<string> {
+		const bridge = this._debugBridge;
+		if (!bridge) { return '[Debug unavailable]'; }
+
+		const rest = input.slice('/debug'.length).trim();
+		const space = rest.indexOf(' ');
+		const sub = space === -1 ? rest : rest.slice(0, space);
+		const argText = space === -1 ? '' : rest.slice(space + 1).trim();
+
+		if (!sub) { return DEBUG_USAGE; }
+
+		let args: unknown;
+		if (argText) {
+			try {
+				args = JSON.parse(argText);
+			} catch (e: any) {
+				return `[Debug error: invalid JSON: ${e.message}]`;
+			}
+		}
+
+		switch (sub) {
+			case 'start': {
+				if (bridge.isActive()) {
+					return '[Debug error: a debug session is already active]';
+				}
+				if (this._debugStarting) {
+					return '[Debug error: a debug session is already starting]';
+				}
+				const config = {
+					type: 'apl',
+					request: 'launch',
+					name: 'aple debug',
+					// "" = live-workspace debug. Without it the config provider
+					// falls back to whichever APL file is open in the editor and
+					// the launch would load and run that file.
+					program: '',
+					...(args as Record<string, unknown> | undefined),
+				};
+				this._debugStarting = true;
+				try {
+					return await bridge.start(config) ? '[Debug started]' : '[Debug start failed]';
+				} catch (e: any) {
+					return `[Debug error: ${e.message}]`;
+				} finally {
+					this._debugStarting = false;
+				}
+			}
+			case 'stop': {
+				if (!bridge.isActive()) { return '[No debug session]'; }
+				try {
+					await bridge.stop();
+					return '[Debug stopped]';
+				} catch (e: any) {
+					return `[Debug error: ${e.message}]`;
+				}
+			}
+			case 'status':
+				return bridge.isActive() ? '[Debug session active]' : '[No debug session]';
+			case 'listen': {
+				this.addDebugListener(socket);
+				return '[Listening]';
+			}
+			default: {
+				if (!bridge.isActive()) { return '[No debug session]'; }
+				if (args === undefined && THREAD_DEFAULT_COMMANDS.has(sub)) {
+					args = { threadId: 1 };
+				}
+				try {
+					const result = await bridge.request(sub, args);
+					return JSON.stringify(result ?? {});
+				} catch (e: any) {
+					return `[Debug error: ${e.message}]`;
+				}
+			}
+		}
+	}
+
+	/**
+	 * Subscribe a socket to DAP events. The bridge subscription itself is
+	 * lazy — created on the first listener, removed in stop() — so a
+	 * server nobody debugs through never touches the bridge.
+	 */
+	private addDebugListener(socket: Net.Socket): void {
+		this._debugListeners.add(socket);
+		socket.once('close', () => this._debugListeners.delete(socket));
+
+		if (this._dapListener || !this._debugBridge) { return; }
+		this._dapListener = (msg: unknown) => {
+			const text = JSON.stringify(msg) + '\0';
+			for (const s of this._debugListeners) {
+				if (s.destroyed) {
+					this._debugListeners.delete(s);
+					continue;
+				}
+				try { s.write(text); } catch { this._debugListeners.delete(s); }
+			}
+		};
+		this._debugBridge.on('dap', this._dapListener);
 	}
 }

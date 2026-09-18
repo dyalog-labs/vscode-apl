@@ -2,6 +2,32 @@
 # aple — client for the vscode-apl eval server
 #
 # Usage: aple <expression>
+#        aple --listen
+#        aple --trace <function> [breakpoint-lines...]
+#
+# <expression> is an APL expression, a /-meta-command, or a /debug
+# command (e.g. '/debug start', '/debug next', '/debug stackTrace').
+#
+# --listen subscribes to DAP events from the debug session and streams
+# them (one JSON object per line) until interrupted.
+#
+# --trace is a minimal line-by-line tracer driven purely by language
+# primitives (⎕STOP to suspend, →⎕LC to resume one line), so it needs
+# nothing beyond the eval server — no debug session, no editor UI.
+# Stepping is step-over: calls run to completion unless the callee has
+# breakpoints.
+#
+#   aple --trace foo        trace foo from line 1
+#   aple --trace foo 3 5    run foo, stopping only at lines 3 and 5
+#
+# At the trace> prompt:
+#   s          step one line
+#   c          continue to next breakpoint (or to completion)
+#   b          backtrace
+#   v          names of variables visible in the suspended frame
+#   l          source listing of the suspended function + current line
+#   q          quit (clears stops; warns if still suspended)
+#   <other>    evaluated as APL in the suspended frame
 #
 # Optional env:
 #   APL_EVAL_PORT — TCP port (default: 4502; must match
@@ -15,13 +41,74 @@ set -u
 
 PORT="${APL_EVAL_PORT:-4502}"
 
-if [ -z "${1:-}" ]; then
-  echo "Usage: aple <expression>" >&2
-  exit 1
-fi
+# One request per connection: send a line, read the \0-terminated reply.
+ask() {
+  exec 3<>/dev/tcp/127.0.0.1/"$PORT" || exit 1
+  printf '%s\n' "$1" >&3
+  local reply=''
+  IFS= read -r -d $'\0' reply <&3 || true
+  printf '%s' "$reply"
+  exec 3>&-
+}
 
-exec 3<>/dev/tcp/127.0.0.1/"$PORT"
-printf '%s\n' "$1" >&3
-IFS= read -r -d $'\0' reply <&3 || true
-printf '%s' "$reply"
-exec 3>&-
+trace() {
+  FN="${1:?usage: aple --trace <function> [breakpoint-lines...]}"; shift
+  BPS="${*:-}"
+
+  if [ "$(ask "⎕NC '$FN'")" != "3" ]; then
+    echo "aple: '$FN' is not a function in the workspace" >&2
+    exit 1
+  fi
+
+  finished() { [ "$(ask '≢⎕SI')" = "0" ]; }
+
+  # All-lines stops = tracing; explicit lines = classic breakpoints.
+  ask "(${BPS:-⍳¯1+≢⎕CR '$FN'}) ⎕STOP '$FN'" > /dev/null
+
+  echo "aple: tracing $FN  (s=step c=continue b=bt v=vars l=list q=quit, else APL)"
+  ask "$FN"; echo
+
+  while ! finished; do
+    printf 'trace> '
+    IFS= read -r cmd || break
+    case "$cmd" in
+      s) ask "(⍳¯1+≢⎕CR ⊃⎕SI) ⎕STOP ⊃⎕SI ⋄ →⎕LC" ;;
+      c) ask "(${BPS:-⍬}) ⎕STOP ⊃⎕SI ⋄ →⎕LC" ;;
+      b) ask "↑⎕SI{⍺,'[',⍵,']'}¨⍕¨⎕LC" ;;
+      v) ask "⍕⎕NL ¯2" ;;
+      l) ask "(⎕VR ⊃⎕SI),(⎕UCS 10),'   at ',(⊃⎕SI),'[',(⍕⊃⎕LC),']'" ;;
+      q) break ;;
+      '') continue ;;
+      *) ask "$cmd" ;;
+    esac
+    echo
+  done
+
+  ask "⍬ ⎕STOP '$FN'" > /dev/null
+  if finished; then
+    echo "aple: $FN finished"
+  else
+    echo "aple: quit while $(ask '⊃⎕SI') is still suspended — resume with: aple '→⎕LC'  (or aple ')reset')"
+  fi
+}
+
+case "${1:-}" in
+  '')
+    echo "Usage: aple <expression> | aple --listen | aple --trace <fn> [lines...]" >&2
+    exit 1
+    ;;
+  --listen)
+    exec 3<>/dev/tcp/127.0.0.1/"$PORT"
+    printf '/debug listen\n' >&3
+    while IFS= read -r -d $'\0' msg <&3; do
+      printf '%s\n' "$msg"
+    done
+    ;;
+  --trace)
+    shift
+    trace "$@"
+    ;;
+  *)
+    ask "$1"
+    ;;
+esac

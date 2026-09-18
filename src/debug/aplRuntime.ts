@@ -588,6 +588,15 @@ export class AplRuntime extends EventEmitter {
 	}
 
 	/**
+	 * Interrupt (pause) running code. Goes through the session rather
+	 * than the debug `send` path: StrongInterrupt is a session-level
+	 * RIDE message, not bound to a tracer window.
+	 */
+	public interrupt() {
+		this._session?.interrupt();
+	}
+
+	/**
 	 * Continue execution to the end/beginning.
 	 */
 	public continue() {

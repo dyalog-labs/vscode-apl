@@ -47,7 +47,11 @@ export const commands = {
 
 export const debug = {
 	activeDebugSession: undefined as any,
-	breakpoints: [],
+	breakpoints: [] as any[],
+	addBreakpoints: (bps: any[]) => { debug.breakpoints.push(...bps); },
+	removeBreakpoints: (bps: any[]) => {
+		debug.breakpoints = debug.breakpoints.filter(b => !bps.includes(b));
+	},
 	registerDebugConfigurationProvider: () => ({ dispose: () => {} }),
 	registerDebugAdapterDescriptorFactory: () => ({ dispose: () => {} }),
 	registerDebugAdapterTrackerFactory: () => ({ dispose: () => {} }),
@@ -56,7 +60,8 @@ export const debug = {
 	onDidChangeActiveDebugSession: () => ({ dispose: () => {} }),
 	onDidChangeBreakpoints: () => ({ dispose: () => {} }),
 	onDidReceiveDebugSessionCustomEvent: () => ({ dispose: () => {} }),
-	startDebugging: async () => true
+	startDebugging: async () => true,
+	stopDebugging: async () => { /* */ }
 };
 
 export const languages = {
@@ -130,6 +135,15 @@ export enum StatusBarAlignment {
 export class Disposable {
 	constructor(private _callOnDispose: () => void) {}
 	dispose() { this._callOnDispose(); }
+}
+
+export class Location {
+	public readonly range: Range;
+	constructor(public readonly uri: Uri, rangeOrPosition: Range | Position) {
+		this.range = rangeOrPosition instanceof Range
+			? rangeOrPosition
+			: new Range(rangeOrPosition, rangeOrPosition);
+	}
 }
 
 export class SourceBreakpoint {

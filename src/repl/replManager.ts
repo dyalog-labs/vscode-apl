@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { AplSession } from '../session/aplSession';
 import { EvalServer } from './evalServer';
+import { VsCodeDebugBridge } from '../debug/debugBridge';
 import { ReplTab } from './replTab';
 import { updateStatusBar } from '../statusBar';
 
@@ -20,6 +21,7 @@ export class ReplManager implements vscode.Disposable {
 	private _activeTabId: string | undefined;
 	private _context!: vscode.ExtensionContext;
 	private _evalServer?: EvalServer;
+	private _debugBridge?: VsCodeDebugBridge;
 
 	// Shared input history (persisted in globalState)
 	private _inputHistory: string[] = [];
@@ -227,7 +229,8 @@ export class ReplManager implements vscode.Disposable {
 			);
 		}
 		if (!this._evalServer) {
-			this._evalServer = new EvalServer(this);
+			this._debugBridge ??= new VsCodeDebugBridge();
+			this._evalServer = new EvalServer(this, this._debugBridge);
 		}
 		return this._evalServer.start(port);
 	}
@@ -245,6 +248,8 @@ export class ReplManager implements vscode.Disposable {
 	public dispose(): void {
 		// Fire-and-forget — dispose is sync. Server.stop() is internally idempotent.
 		this.stopEvalServer().catch(() => { /* */ });
+		this._debugBridge?.dispose();
+		this._debugBridge = undefined;
 		for (const tab of this._tabs.values()) {
 			tab.dispose();
 		}

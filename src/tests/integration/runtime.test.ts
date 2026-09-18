@@ -1032,3 +1032,26 @@ suite('AplDebugSession — setBreakpoints uses args.breakpoints', () => {
 			`disabled breakpoint (offset 4) should not appear in ⎕STOP, got: ${lastStop.text}`);
 	});
 });
+
+// ─── Interrupt (pause) ──────────────────────────────────────────────
+
+suite('AplRuntime — interrupt', () => {
+	let server: MockRideServer;
+	let session: AplSession;
+	let runtime: AplRuntime;
+
+	setup(async () => {
+		({ server, session, runtime } = await createTestRuntime());
+	});
+
+	teardown(() => teardownTestRuntime(session, server));
+
+	test('interrupt() sends StrongInterrupt on the RIDE wire', async () => {
+		runtime.interrupt();
+		await new Promise(r => setTimeout(r, 100));
+		assert.strictEqual(
+			server.getReceived('StrongInterrupt').length, 1,
+			'pause must reach the interpreter as a StrongInterrupt',
+		);
+	});
+});

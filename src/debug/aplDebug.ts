@@ -475,11 +475,35 @@ export class AplDebugSession extends LoggingDebugSession {
 	protected continueRequest(response: DebugProtocol.ContinueResponse, args: DebugProtocol.ContinueArguments): void {
 		this._runtime.continue();
 		this.sendResponse(response);
+		this.notifyContinued();
 	}
 
 	protected nextRequest(response: DebugProtocol.NextResponse, args: DebugProtocol.NextArguments): void {
 		this._runtime.step();
 		this.sendResponse(response);
+		this.notifyContinued();
+	}
+
+	/**
+	 * Pause (interrupt) running code. Without this override the base
+	 * class acknowledges the request without doing anything — the
+	 * interpreter would keep running while every client believes it
+	 * paused.
+	 */
+	protected pauseRequest(response: DebugProtocol.PauseResponse, args: DebugProtocol.PauseArguments): void {
+		this._runtime.interrupt();
+		this.sendResponse(response);
+	}
+
+	/**
+	 * Emit `continued` after a flow request. VS Code only infers the
+	 * running state for requests it issued itself; when an external
+	 * client (eval server /debug) steps, this event is what flips the
+	 * UI out of its paused state — and vice versa for /debug listeners
+	 * when the user clicks the step buttons.
+	 */
+	private notifyContinued(): void {
+		this.sendEvent(new ContinuedEvent(AplDebugSession.threadID));
 	}
 
 	protected stepInTargetsRequest(response: DebugProtocol.StepInTargetsResponse, args: DebugProtocol.StepInTargetsArguments) {
@@ -495,11 +519,13 @@ export class AplDebugSession extends LoggingDebugSession {
 	protected stepInRequest(response: DebugProtocol.StepInResponse, args: DebugProtocol.StepInArguments): void {
 		this._runtime.stepIn(args.targetId);
 		this.sendResponse(response);
+		this.notifyContinued();
 	}
 
 	protected stepOutRequest(response: DebugProtocol.StepOutResponse, args: DebugProtocol.StepOutArguments): void {
 		this._runtime.stepOut();
 		this.sendResponse(response);
+		this.notifyContinued();
 	}
 
 	protected async evaluateRequest(response: DebugProtocol.EvaluateResponse, args: DebugProtocol.EvaluateArguments, request?: DebugProtocol.Request): Promise<void> {
