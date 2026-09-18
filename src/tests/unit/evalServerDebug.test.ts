@@ -460,4 +460,192 @@ suite('EvalServer /debug', () => {
 			debugSock.destroy();
 		});
 	});
+
+	// ─────────────────────────────────────────────────────────────────────
+	// EVALUATE SERIALIZATION
+	//
+	// `evaluate` (and `setExpression`) run APL on the same interpreter the
+	// eval FIFO drives. Letting them bypass the queue means a debug
+	// evaluation can execute between two queued evals and its output gets
+	// attributed to the queued client. They must join the FIFO; only
+	// non-executing flow commands (pause, next, …) stay out of band.
+	// ─────────────────────────────────────────────────────────────────────
+
+	suite('evaluate serialization', () => {
+		setup(() => { bridge.active = true; });
+
+		test('/debug evaluate waits for the in-flight eval to finish', async () => {
+			session.autoReady = false; // hold the first eval open
+
+			const evalSock = await connect(port);
+			evalSock.write('slow\n');
+			await sleep(50);
+			assert.deepStrictEqual(session.executed, ['slow']);
+
+			const dbgSock = await connect(port);
+			dbgSock.write('/debug evaluate {"expression":"2+2"}\n');
+			await sleep(100);
+			assert.deepStrictEqual(
+				bridge.requests, [],
+				'evaluate must not reach the adapter while an eval is in flight',
+			);
+
+			// Complete the stuck eval; the queued evaluate must now run.
+			const evalReply = readMessages(evalSock, 1);
+			const dbgReply = readMessages(dbgSock, 1);
+			session.emit('output', 'done');
+			session.emit('ready');
+
+			assert.deepStrictEqual(await evalReply, ['done']);
+			assert.deepStrictEqual(JSON.parse((await dbgReply)[0]), {});
+			assert.deepStrictEqual(bridge.requests, [
+				{ command: 'evaluate', args: { expression: '2+2' } },
+			]);
+			evalSock.destroy();
+			dbgSock.destroy();
+		});
+
+		test('evals and evaluate run in arrival order', async () => {
+			session.autoReady = false;
+			const order: string[] = [];
+			const origExecute = session.execute.bind(session);
+			(session as any).execute = (expr: string) => { order.push(`eval:${expr}`); origExecute(expr); };
+			const origRequest = bridge.request.bind(bridge);
+			(bridge as any).request = async (cmd: string, args?: unknown) => {
+				order.push(`dap:${cmd}`);
+				return origRequest(cmd, args);
+			};
+
+			const sockA = await connect(port);
+			sockA.write('first\n');
+			await sleep(50);
+			const dbgSock = await connect(port);
+			dbgSock.write('/debug evaluate {"expression":"mid"}\n');
+			await sleep(50);
+			const sockB = await connect(port);
+			sockB.write('second\n');
+			await sleep(50);
+			assert.deepStrictEqual(
+				order, ['eval:first'],
+				'nothing may run while the first eval is in flight',
+			);
+
+			// Finish 'first'; evaluate must run before 'second' is dispatched.
+			session.emit('output', ''); session.emit('ready');
+			await sleep(100);
+			assert.deepStrictEqual(order, ['eval:first', 'dap:evaluate', 'eval:second']);
+
+			sockA.destroy(); dbgSock.destroy(); sockB.destroy();
+		});
+
+		test('setExpression is serialized like evaluate', async () => {
+			session.autoReady = false;
+			const evalSock = await connect(port);
+			evalSock.write('slow\n');
+			await sleep(50);
+
+			const dbgSock = await connect(port);
+			dbgSock.write('/debug setExpression {"expression":"x","value":"1"}\n');
+			await sleep(100);
+			assert.strictEqual(bridge.requests.length, 0, 'setExpression executes APL — it must queue');
+
+			session.emit('output', ''); session.emit('ready');
+			await readMessages(dbgSock, 1);
+			assert.deepStrictEqual(bridge.requests.map(r => r.command), ['setExpression']);
+			evalSock.destroy(); dbgSock.destroy();
+		});
+
+		test('pause overtakes a queued evaluate', async () => {
+			session.autoReady = false;
+			const evalSock = await connect(port);
+			evalSock.write('slow\n');
+			await sleep(50);
+
+			const dbgSock = await connect(port);
+			dbgSock.write('/debug evaluate {"expression":"2+2"}\n');
+			await sleep(50);
+
+			const pauseSock = await connect(port);
+			pauseSock.write('/debug pause\n');
+			const [pauseReply] = await readMessages(pauseSock, 1, 500);
+			assert.deepStrictEqual(JSON.parse(pauseReply), {});
+			assert.deepStrictEqual(
+				bridge.requests.map(r => r.command), ['pause'],
+				'pause must reach the adapter while evaluate is still queued',
+			);
+			evalSock.destroy(); dbgSock.destroy(); pauseSock.destroy();
+		});
+
+		test("a dead client's queued evaluate is skipped", async () => {
+			session.autoReady = false;
+			const evalSock = await connect(port);
+			evalSock.write('slow\n');
+			await sleep(50);
+
+			const dbgSock = await connect(port);
+			dbgSock.write('/debug evaluate {"expression":"2+2"}\n');
+			await sleep(50);
+			dbgSock.destroy();
+			await sleep(50);
+
+			session.emit('output', ''); session.emit('ready');
+			await sleep(100);
+			assert.deepStrictEqual(
+				bridge.requests, [],
+				'an evaluate whose client vanished must not run',
+			);
+			evalSock.destroy();
+		});
+	});
+
+	// ─────────────────────────────────────────────────────────────────────
+	// LISTENER LIFECYCLE
+	// ─────────────────────────────────────────────────────────────────────
+
+	suite('listener lifecycle', () => {
+		test('bridge subscription is dropped when the last listener disconnects', async () => {
+			const sock = await connect(port);
+			sock.write('/debug listen\n');
+			await readMessages(sock, 1);
+			assert.strictEqual(bridge.listenerCount('dap'), 1);
+
+			sock.destroy();
+			await sleep(50);
+			assert.strictEqual(
+				bridge.listenerCount('dap'), 0,
+				'no listeners left — the server must detach from the bridge',
+			);
+		});
+
+		test('subscription survives while other listeners remain', async () => {
+			const a = await connect(port);
+			const b = await connect(port);
+			a.write('/debug listen\n');
+			b.write('/debug listen\n');
+			await Promise.all([readMessages(a, 1), readMessages(b, 1)]);
+
+			a.destroy();
+			await sleep(50);
+			assert.strictEqual(bridge.listenerCount('dap'), 1);
+			b.destroy();
+		});
+
+		test('a new listener after full disconnect re-subscribes and receives events', async () => {
+			const first = await connect(port);
+			first.write('/debug listen\n');
+			await readMessages(first, 1);
+			first.destroy();
+			await sleep(50);
+
+			const second = await connect(port);
+			second.write('/debug listen\n');
+			await readMessages(second, 1);
+
+			const pending = readMessages(second, 1);
+			bridge.emit('dap', { type: 'event', event: 'stopped', body: {} });
+			const [msg] = await pending;
+			assert.strictEqual(JSON.parse(msg).event, 'stopped');
+			second.destroy();
+		});
+	});
 });

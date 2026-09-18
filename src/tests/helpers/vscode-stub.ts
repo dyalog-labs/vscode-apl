@@ -54,7 +54,15 @@ export const debug = {
 	},
 	registerDebugConfigurationProvider: () => ({ dispose: () => {} }),
 	registerDebugAdapterDescriptorFactory: () => ({ dispose: () => {} }),
-	registerDebugAdapterTrackerFactory: () => ({ dispose: () => {} }),
+	trackerFactories: [] as Array<{ type: string; factory: any }>,
+	registerDebugAdapterTrackerFactory: (type: string, factory: any) => {
+		const entry = { type, factory };
+		debug.trackerFactories.push(entry);
+		return { dispose: () => {
+			const i = debug.trackerFactories.indexOf(entry);
+			if (i !== -1) { debug.trackerFactories.splice(i, 1); }
+		} };
+	},
 	onDidStartDebugSession: () => ({ dispose: () => {} }),
 	onDidTerminateDebugSession: () => ({ dispose: () => {} }),
 	onDidChangeActiveDebugSession: () => ({ dispose: () => {} }),

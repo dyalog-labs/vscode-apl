@@ -107,6 +107,97 @@ suite('VsCodeDebugBridge', () => {
 				/source\.path/,
 			);
 		});
+
+		// A malformed request must fail BEFORE the existing breakpoints are
+		// removed — clear-then-validate turns a client typo into silent
+		// destruction of the user's gutter breakpoints.
+
+		test('non-array breakpoints payload leaves existing breakpoints intact', async () => {
+			(bridge as any)._session = { customRequest: async () => ({}) };
+			await bridge.request('setBreakpoints', {
+				source: { path: FILE },
+				breakpoints: [{ line: 2 }],
+			});
+			await assert.rejects(bridge.request('setBreakpoints', {
+				source: { path: FILE },
+				breakpoints: {} as any,
+			}));
+			assert.deepStrictEqual(modelLines(FILE), [2], 'existing breakpoints must survive');
+		});
+
+		test('invalid line numbers are rejected without clearing', async () => {
+			(bridge as any)._session = { customRequest: async () => ({}) };
+			await bridge.request('setBreakpoints', {
+				source: { path: FILE },
+				breakpoints: [{ line: 4 }],
+			});
+			for (const bad of [{ line: 0 }, { line: -3 }, { line: 1.5 }, { line: 'x' as any }, {}]) {
+				await assert.rejects(
+					bridge.request('setBreakpoints', { source: { path: FILE }, breakpoints: [bad as any] }),
+					/line/i,
+					`line ${JSON.stringify(bad)} must be rejected`,
+				);
+			}
+			assert.deepStrictEqual(modelLines(FILE), [4], 'existing breakpoints must survive');
+		});
+	});
+
+	// ─────────────────────────────────────────────────────────────────────
+	// EVENT FILTERING BY SESSION
+	//
+	// The tracker factory sees every `apl` session. Events must only be
+	// re-emitted for the session the bridge tracks — otherwise a second
+	// concurrent debug session's stopped/terminated events leak to
+	// listeners who then step the wrong session.
+	// ─────────────────────────────────────────────────────────────────────
+
+	suite('event filtering by session', () => {
+		function createTracker(session: any) {
+			const entry = (vscode.debug as any).trackerFactories
+				.filter((f: any) => f.type === 'apl').pop();
+			assert.ok(entry, 'bridge must register a tracker factory for apl');
+			return entry.factory.createDebugAdapterTracker(session);
+		}
+
+		test("re-emits events only from the bridge's own session", () => {
+			const sessionA = { type: 'apl' };
+			const sessionB = { type: 'apl' };
+			(bridge as any)._session = sessionA;
+
+			const events: any[] = [];
+			bridge.on('dap', (e: any) => events.push(e));
+
+			createTracker(sessionA).onDidSendMessage({ type: 'event', event: 'stopped' });
+			createTracker(sessionB).onDidSendMessage({ type: 'event', event: 'terminated' });
+
+			assert.deepStrictEqual(
+				events.map(e => e.event), ['stopped'],
+				"another session's events must not reach listeners",
+			);
+		});
+
+		test('tracker creation adopts the session when none is tracked', () => {
+			// Covers /debug listen before any /debug start: the first apl
+			// session VS Code spins up becomes the tracked one, and its
+			// events flow — previously they were dropped.
+			const s = { type: 'apl' };
+			const events: any[] = [];
+			bridge.on('dap', (e: any) => events.push(e));
+
+			const tracker = createTracker(s);
+			assert.strictEqual((bridge as any)._session, s, 'tracker must adopt the session');
+			tracker.onDidSendMessage({ type: 'event', event: 'initialized' });
+			assert.deepStrictEqual(events.map(e => e.event), ['initialized']);
+		});
+
+		test('non-event messages are not re-emitted', () => {
+			const s = { type: 'apl' };
+			(bridge as any)._session = s;
+			const events: any[] = [];
+			bridge.on('dap', (e: any) => events.push(e));
+			createTracker(s).onDidSendMessage({ type: 'response', command: 'next' });
+			assert.deepStrictEqual(events, []);
+		});
 	});
 
 	suite('other requests', () => {
