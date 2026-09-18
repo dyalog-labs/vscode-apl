@@ -10,6 +10,6 @@ tsconfig.json
 out
 sampleWebWorkerWorkspace
 sampleWorkspace
-docs/*
+docs/**
 .claude/*
 .vscode-test.mjs
