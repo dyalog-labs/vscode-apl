@@ -23,6 +23,8 @@ export class VsCodeDebugBridge extends EventEmitter implements DebugBridge {
 	/** In-flight setBreakpoints barrier (at most one). */
 	private _bpWaiter?: {
 		path: string;
+		lines: number[];
+		reply: Promise<unknown>;
 		seq?: number;
 		settled: boolean;
 		settle: (body?: unknown) => void;
@@ -49,15 +51,22 @@ export class VsCodeDebugBridge extends EventEmitter implements DebugBridge {
 					return {
 						onWillReceiveMessage: (msg: any) => {
 							// VS Code propagating our model change: this is the
-							// setBreakpoints request for the waited-on file —
-							// remember its seq to match the response below.
+							// final setBreakpoints request for the waited-on file.
+							// Removals can send intermediate (including empty)
+							// sets; only acknowledge the requested replacement.
 							if (session !== this._session) { return; }
 							const w = this._bpWaiter;
 							if (w && w.seq === undefined
 								&& msg?.type === 'request' && msg.command === 'setBreakpoints'
 								&& msg.arguments?.source?.path
 								&& vscode.Uri.file(msg.arguments.source.path).fsPath === w.path) {
-								w.seq = msg.seq;
+								const specs = msg.arguments.breakpoints ?? [];
+								if (Array.isArray(specs)) {
+									const lines = [...new Set<number>(specs.map(b => b.line))].sort((a, b) => a - b);
+									if (lines.length === w.lines.length && lines.every((line, i) => line === w.lines[i])) {
+										w.seq = msg.seq;
+									}
+								}
 							}
 						},
 						onDidSendMessage: (msg: any) => {
@@ -137,43 +146,54 @@ export class VsCodeDebugBridge extends EventEmitter implements DebugBridge {
 		if (lines.some(l => typeof l !== 'number' || !Number.isInteger(l) || l < 1)) {
 			throw new Error('breakpoint lines must be integers >= 1');
 		}
-		const additions = lines.map(l => new vscode.SourceBreakpoint(
-			new vscode.Location(uri, new vscode.Position(l - 1, 0))));
-
-		const existing = vscode.debug.breakpoints.filter(bp =>
+		const targetLines = [...new Set(lines)].sort((a, b) => a - b);
+		const existing = vscode.debug.breakpoints.filter((bp): bp is vscode.SourceBreakpoint =>
 			bp instanceof vscode.SourceBreakpoint && bp.location.uri.fsPath === uri.fsPath);
+		// Keep already-requested stops so removing other lines cannot briefly
+		// produce the target set and then clear it again before the additions.
+		const retained = existing.filter(bp => bp.enabled && !bp.condition && !bp.hitCondition && !bp.logMessage
+			&& bp.location.range.start.character === 0 && lines.includes(bp.location.range.start.line + 1));
+		const removals = existing.filter(bp => !retained.includes(bp));
+		const additions = lines.filter(line => !retained.some(bp => bp.location.range.start.line + 1 === line))
+			.map(line => new vscode.SourceBreakpoint(new vscode.Location(uri, new vscode.Position(line - 1, 0))));
+		const optimistic = { breakpoints: lines.map(line => ({ line, verified: false })) };
 
 		// Nothing to change → VS Code sends the adapter nothing; waiting
 		// would only burn the timeout.
-		if (existing.length === 0 && additions.length === 0) {
-			return { breakpoints: [] };
+		if (removals.length === 0 && additions.length === 0) {
+			const pending = this._bpWaiter;
+			if (pending?.path === uri.fsPath && targetLines.length === pending.lines.length
+				&& targetLines.every((line, i) => line === pending.lines[i])) {
+				return pending.reply;
+			}
+			return optimistic;
 		}
-
-		const optimistic = { breakpoints: lines.map(line => ({ line, verified: false })) };
 
 		// One barrier at a time — a newcomer releases its predecessor.
 		this._bpWaiter?.settle(undefined);
-		const reply = new Promise<unknown>((resolve) => {
-			let timer: NodeJS.Timeout;
-			const waiter = {
-				path: uri.fsPath,
-				seq: undefined as number | undefined,
-				settled: false,
-				settle: (body?: unknown) => {
-					if (waiter.settled) { return; }
-					waiter.settled = true;
-					clearTimeout(timer);
-					if (this._bpWaiter === waiter) { this._bpWaiter = undefined; }
-					resolve(body ?? optimistic);
-				},
-			};
-			timer = setTimeout(() => waiter.settle(undefined), this.propagationTimeoutMs);
-			this._bpWaiter = waiter;
-		});
+		let resolve!: (body: unknown) => void;
+		const reply = new Promise<unknown>(r => { resolve = r; });
+		let timer: NodeJS.Timeout;
+		const waiter = {
+			path: uri.fsPath,
+			lines: targetLines,
+			reply,
+			seq: undefined as number | undefined,
+			settled: false,
+			settle: (body?: unknown) => {
+				if (waiter.settled) { return; }
+				waiter.settled = true;
+				clearTimeout(timer);
+				if (this._bpWaiter === waiter) { this._bpWaiter = undefined; }
+				resolve(body ?? optimistic);
+			},
+		};
+		timer = setTimeout(() => waiter.settle(undefined), this.propagationTimeoutMs);
+		this._bpWaiter = waiter;
 
 		// Install the waiter BEFORE touching the model: propagation can be
 		// synchronous-ish and must not race past us.
-		if (existing.length > 0) { vscode.debug.removeBreakpoints(existing); }
+		if (removals.length > 0) { vscode.debug.removeBreakpoints(removals); }
 		if (additions.length > 0) { vscode.debug.addBreakpoints(additions); }
 
 		return reply;

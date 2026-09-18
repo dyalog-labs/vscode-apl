@@ -536,7 +536,12 @@ export class AplDebugSession extends LoggingDebugSession {
 		};
 
 		if (args.context === 'repl') {
-			this._runtime.execute(args.expression);
+			try {
+				await this._runtime.executeAndWait(args.expression);
+			} catch (e: any) {
+				response.success = false;
+				response.message = e.message;
+			}
 		} else if (args.context === 'hover') {
 			const win = args.frameId || 0;
 			const token = request?.seq || win;

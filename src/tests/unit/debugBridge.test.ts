@@ -30,6 +30,8 @@ suite('VsCodeDebugBridge', () => {
 	suite('setBreakpoints goes through the VS Code model', () => {
 		const FILE = '/ws/src/Foo.aplf';
 		const OTHER_FILE = '/ws/src/Bar.aplf';
+		// These model-only tests have no adapter to acknowledge propagation.
+		setup(() => { bridge.propagationTimeoutMs = 10; });
 
 		function modelLines(path: string): number[] {
 			return (vscode.debug.breakpoints as any[])
@@ -186,7 +188,7 @@ suite('VsCodeDebugBridge', () => {
 			// VS Code propagates the model change to the adapter…
 			tracker.onWillReceiveMessage({
 				type: 'request', seq: 7, command: 'setBreakpoints',
-				arguments: { source: { path: FILE } },
+				arguments: { source: { path: FILE }, breakpoints: [{ line: 2 }, { line: 5 }] },
 			});
 			// …and the adapter answers with the authoritative result.
 			const body = { breakpoints: [
@@ -198,6 +200,106 @@ suite('VsCodeDebugBridge', () => {
 			});
 
 			assert.deepStrictEqual(await pending, body, 'client must get the adapter result, not a guess');
+		});
+
+		test('replacement ignores intermediate clear and partial-removal responses', async () => {
+			const { tracker } = setup_();
+			const uri = vscode.Uri.file(FILE);
+			vscode.debug.addBreakpoints([2, 4].map(line => new vscode.SourceBreakpoint(
+				new vscode.Location(uri, new vscode.Position(line - 1, 0)))));
+			const pending = bridge.request('setBreakpoints', {
+				source: { path: FILE }, breakpoints: [{ line: 9 }, { line: 5 }],
+			});
+			let settled = false;
+			void pending.then(() => { settled = true; });
+
+			for (const [seq, lines] of [[1, [4]], [2, []]] as Array<[number, number[]]>) {
+				tracker.onWillReceiveMessage({
+					type: 'request', seq, command: 'setBreakpoints',
+					arguments: { source: { path: FILE }, breakpoints: lines.map(line => ({ line })) },
+				});
+				tracker.onDidSendMessage({
+					type: 'response', request_seq: seq, command: 'setBreakpoints', success: true,
+					body: { breakpoints: lines.map(line => ({ line, verified: true })) },
+				});
+				await new Promise(r => setImmediate(r));
+				assert.strictEqual(settled, false, 'removal must not complete the replacement');
+			}
+
+			// VS Code may sort the requested lines before forwarding them.
+			tracker.onWillReceiveMessage({
+				type: 'request', seq: 3, command: 'setBreakpoints',
+				arguments: { source: { path: FILE }, breakpoints: [{ line: 5 }, { line: 9 }] },
+			});
+			await new Promise(r => setImmediate(r));
+			assert.strictEqual(settled, false, 'the replacement must also be acknowledged');
+			const body = { breakpoints: [{ id: 5, line: 5, verified: true }, { id: 9, line: 9, verified: true }] };
+			tracker.onDidSendMessage({
+				type: 'response', request_seq: 3, command: 'setBreakpoints', success: true, body,
+			});
+			assert.deepStrictEqual(await pending, body);
+		});
+
+		test('clearing waits for the final empty set, not an intermediate removal', async () => {
+			const { tracker } = setup_();
+			const uri = vscode.Uri.file(FILE);
+			vscode.debug.addBreakpoints([2, 4].map(line => new vscode.SourceBreakpoint(
+				new vscode.Location(uri, new vscode.Position(line - 1, 0)))));
+			const pending = bridge.request('setBreakpoints', { source: { path: FILE }, breakpoints: [] });
+			let settled = false;
+			void pending.then(() => { settled = true; });
+			tracker.onWillReceiveMessage({
+				type: 'request', seq: 1, command: 'setBreakpoints',
+				arguments: { source: { path: FILE }, breakpoints: [{ line: 4 }] },
+			});
+			tracker.onDidSendMessage({
+				type: 'response', request_seq: 1, command: 'setBreakpoints', success: true,
+				body: { breakpoints: [{ line: 4, verified: true }] },
+			});
+			await new Promise(r => setImmediate(r));
+			assert.strictEqual(settled, false);
+			tracker.onWillReceiveMessage({
+				type: 'request', seq: 2, command: 'setBreakpoints',
+				arguments: { source: { path: FILE }, breakpoints: [] },
+			});
+			tracker.onDidSendMessage({
+				type: 'response', request_seq: 2, command: 'setBreakpoints', success: true,
+				body: { breakpoints: [] },
+			});
+			assert.deepStrictEqual(await pending, { breakpoints: [] });
+		});
+
+		test('retains requested stops while removing other lines', async () => {
+			const { tracker } = setup_();
+			const uri = vscode.Uri.file(FILE);
+			const retained = new vscode.SourceBreakpoint(new vscode.Location(uri, new vscode.Position(3, 0)));
+			vscode.debug.addBreakpoints([
+				new vscode.SourceBreakpoint(new vscode.Location(uri, new vscode.Position(1, 0))), retained,
+			]);
+			const pending = bridge.request('setBreakpoints', { source: { path: FILE }, breakpoints: [{ line: 4 }] });
+			assert.deepStrictEqual(vscode.debug.breakpoints, [retained], 'the requested stop must not be removed and re-added');
+			tracker.onWillReceiveMessage({
+				type: 'request', seq: 1, command: 'setBreakpoints',
+				arguments: { source: { path: FILE }, breakpoints: [{ line: 4 }] },
+			});
+			const body = { breakpoints: [{ id: 4, line: 4, verified: true }] };
+			tracker.onDidSendMessage({ type: 'response', request_seq: 1, command: 'setBreakpoints', success: true, body });
+			assert.deepStrictEqual(await pending, body);
+		});
+
+		test('an identical request shares the pending propagation', async () => {
+			const { tracker } = setup_();
+			const args = { source: { path: FILE }, breakpoints: [{ line: 2 }] };
+			const first = bridge.request('setBreakpoints', args);
+			const second = bridge.request('setBreakpoints', args);
+			let settled = false;
+			void second.then(() => { settled = true; });
+			await new Promise(r => setImmediate(r));
+			assert.strictEqual(settled, false, 'the model is updated but the adapter still has the old stops');
+			tracker.onWillReceiveMessage({ type: 'request', seq: 1, command: 'setBreakpoints', arguments: args });
+			const body = { breakpoints: [{ id: 1, line: 2, verified: true }] };
+			tracker.onDidSendMessage({ type: 'response', request_seq: 1, command: 'setBreakpoints', success: true, body });
+			assert.deepStrictEqual(await Promise.all([first, second]), [body, body]);
 		});
 
 		test('unrelated adapter traffic does not release the reply', async () => {

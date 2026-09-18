@@ -1,11 +1,14 @@
 import assert = require('assert');
 import Path = require('path');
+import * as Net from 'net';
 import { AplRuntime, FileAccessor } from '../../debug/aplRuntime';
 import { AplSession } from '../../session/aplSession';
 import { AplDebugSession } from '../../debug/aplDebug';
 import { MockRideServer } from '../helpers/mockRideServer';
 import { seedLinkInfo } from '../helpers/sessionTestUtils';
 import { normPath } from '../../utils';
+import { EvalServer } from '../../repl/evalServer';
+import { VsCodeDebugBridge } from '../../debug/debugBridge';
 
 const mockFileAccessor: FileAccessor = {
 	isWindows: false,
@@ -45,6 +48,130 @@ function teardownTestRuntime(session: AplSession, server: MockRideServer) {
 	session.disconnect();
 	server.stop();
 }
+
+suite('EvalServer — debug evaluation completion', () => {
+	let ride: MockRideServer;
+	let session: AplSession;
+	let runtime: AplRuntime;
+	let bridge: VsCodeDebugBridge;
+	let evalServer: EvalServer;
+	let port: number;
+
+	setup(async () => {
+		({ server: ride, session, runtime } = await createTestRuntime());
+		const adapter = new AplDebugSession(mockFileAccessor) as any;
+		adapter._runtime = runtime;
+		let seq = 0;
+		const pending = new Map<number, { resolve: (body: unknown) => void; reject: (error: Error) => void }>();
+		adapter.sendResponse = (response: any) => {
+			const request = pending.get(response.request_seq)!;
+			pending.delete(response.request_seq);
+			if (response.success === false) { request.reject(new Error(response.message)); }
+			else { request.resolve(response.body); }
+		};
+		bridge = new VsCodeDebugBridge();
+		(bridge as any)._session = {
+			customRequest: (command: string, args: unknown) => new Promise((resolve, reject) => {
+				const id = ++seq;
+				pending.set(id, { resolve, reject });
+				adapter.dispatchRequest({ type: 'request', seq: id, command, arguments: args });
+			}),
+		};
+		evalServer = new EvalServer({ activeSession: session } as any, bridge);
+		port = await evalServer.start(0);
+	});
+
+	teardown(async () => {
+		runtime.detachFromSession();
+		await evalServer.stop();
+		bridge.dispose();
+		teardownTestRuntime(session, ride);
+	});
+
+	async function connect(): Promise<Net.Socket> {
+		const socket = Net.createConnection(port, '127.0.0.1');
+		await new Promise<void>((resolve, reject) => {
+			socket.once('connect', resolve);
+			socket.once('error', reject);
+		});
+		return socket;
+	}
+
+	function replies(socket: Net.Socket, count: number): Promise<string[]> {
+		return new Promise(resolve => {
+			let data = '';
+			const onData = (chunk: Buffer) => {
+				data += chunk.toString();
+				const messages = data.split('\0');
+				if (messages.length > count) {
+					socket.removeListener('data', onData);
+					resolve(messages.slice(0, count));
+				}
+			};
+			socket.on('data', onData);
+		});
+	}
+
+	test('holds the FIFO through echo and output, but still allows pause', async () => {
+		let received!: () => void;
+		const executing = new Promise<void>(resolve => { received = resolve; });
+		ride.onCommand('Execute', args => {
+			if (args.text === 'slow\n') { received(); return; }
+			ride.send('EchoInput', { input: args.text });
+			ride.send('AppendSessionOutput', { result: 'plain output' });
+			ride.send('SetPromptType', { type: 1 });
+		});
+		const socket = await connect();
+		let replied = false;
+		const results = replies(socket, 2);
+		socket.once('data', () => { replied = true; });
+		socket.write('/debug evaluate {"expression":"slow","context":"repl"}\nplain\n');
+		await executing;
+
+		// A leftover prompt from preceding work must not complete this eval.
+		ride.send('SetPromptType', { type: 1 });
+		await new Promise(r => setTimeout(r, 60));
+		assert.strictEqual(replied, false, 'must not acknowledge before execution starts');
+		assert.deepStrictEqual(ride.getReceived('Execute').map(a => a.text), ['slow\n']);
+		ride.send('EchoInput', { input: 'slow\n' });
+		ride.send('AppendSessionOutput', { result: 'debug output' });
+		await new Promise(r => setTimeout(r, 60));
+		assert.strictEqual(replied, false, 'echo acknowledges receipt, not completion');
+		assert.deepStrictEqual(ride.getReceived('Execute').map(a => a.text), ['slow\n']);
+
+		const pauseSocket = await connect();
+		const pauseReply = replies(pauseSocket, 1);
+		const interrupted = new Promise<void>(resolve => ride.onCommand('StrongInterrupt', () => resolve()));
+		pauseSocket.write('/debug pause\n');
+		assert.deepStrictEqual(await pauseReply, ['{}']);
+		await interrupted;
+		pauseSocket.destroy();
+
+		ride.send('SetPromptType', { type: 1 });
+		const [debugReply, evalReply] = await results;
+		assert.deepStrictEqual(JSON.parse(debugReply), { result: '', variablesReference: 0 });
+		assert.strictEqual(evalReply, 'plain output', 'debug output must not leak to the following eval');
+		socket.destroy();
+	});
+
+	for (const end of ['disconnect', 'detach'] as const) {
+		test(`${end} rejects an unfinished evaluation and releases the FIFO`, async () => {
+			let received!: () => void;
+			const executing = new Promise<void>(resolve => { received = resolve; });
+			ride.onCommand('Execute', () => received());
+			const socket = await connect();
+			const result = replies(socket, 1);
+			socket.write('/debug evaluate {"expression":"slow","context":"repl"}\n');
+			await executing;
+			if (end === 'disconnect') { session.disconnect(); }
+			else { runtime.detachFromSession(); }
+			assert.match((await result)[0], /^\[Debug error:/);
+			assert.strictEqual((evalServer as any)._busy, false);
+			assert.strictEqual(session.listenerCount('ready'), 0);
+			socket.destroy();
+		});
+	}
+});
 
 // ─── Breakpoint handling ────────────────────────────────────────────
 

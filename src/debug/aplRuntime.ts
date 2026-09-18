@@ -109,6 +109,11 @@ export class AplRuntime extends EventEmitter {
 	private _executeText = '';
 	private _echoReceived = new PendingRequest<void>();
 	private _execTimeoutMs = 10000;
+	private _pendingExecutions = new Set<{
+		text: string;
+		echoSeen: boolean;
+		cancel: (error: Error) => void;
+	}>();
 	private _windows: OpenWindowMessage[] = [];
 
 
@@ -173,6 +178,9 @@ export class AplRuntime extends EventEmitter {
 	 * Detach from the shared session (called when debug session ends).
 	 */
 	public detachFromSession(): void {
+		for (const execution of this._pendingExecutions) {
+			execution.cancel(new Error('Debug session detached before evaluation completed'));
+		}
 		if (this._session) {
 			this._session.clearDebugHandler();
 			this._session = undefined;
@@ -346,6 +354,9 @@ export class AplRuntime extends EventEmitter {
 	}
 
 	private echoInput(x: EchoInputMessage) {
+		for (const execution of this._pendingExecutions) {
+			if (x.input === execution.text) { execution.echoSeen = true; }
+		}
 		if (x.input === this._executeText) {
 			this._echoReceived.resolve(undefined);
 		}
@@ -520,6 +531,42 @@ export class AplRuntime extends EventEmitter {
 	 */
 	public execute(expr: string) {
 		this.exec(0, expr);
+	}
+
+	/** Wait for the evaluation's prompt, not just its receipt by Dyalog. */
+	public executeAndWait(expr: string): Promise<void> {
+		const session = this._session;
+		if (!session?.isConnected) {
+			return Promise.reject(new Error('No connected interpreter for evaluation'));
+		}
+		return new Promise<void>((resolve, reject) => {
+			const cleanup = () => {
+				this._pendingExecutions.delete(execution);
+				session.removeListener('ready', onReady);
+				session.removeListener('stateChanged', onStateChanged);
+				session.removeListener('end', onEnd);
+				session.removeListener('error', onError);
+			};
+			const onReady = () => {
+				// Ignore any prompt left over from a previous command. EchoInput
+				// identifies this command, but precedes its output/completion.
+				if (!execution.echoSeen) { return; }
+				cleanup();
+				resolve();
+			};
+			const onError = (error: Error) => { cleanup(); reject(error); };
+			const onEnd = () => onError(new Error('Interpreter disconnected before evaluation completed'));
+			const onStateChanged = (state: string) => {
+				if (state === 'disconnected') { onEnd(); }
+			};
+			const execution = { text: `${expr}\n`, echoSeen: false, cancel: onError };
+			this._pendingExecutions.add(execution);
+			session.on('ready', onReady);
+			session.on('stateChanged', onStateChanged);
+			session.on('end', onEnd);
+			session.on('error', onError);
+			void this.exec(0, expr).catch(onError);
+		});
 	}
 
 	/**
