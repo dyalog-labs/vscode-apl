@@ -579,7 +579,7 @@ export class AplDebugSession extends LoggingDebugSession {
 		}
 	}
 
-	protected customRequest(command: string, response: DebugProtocol.Response, args: any) {
+	protected async customRequest(command: string, response: DebugProtocol.Response, args: any) {
 		switch (command) {
 			case 'toggleFormatting':
 				this._showHex = !this._showHex;
@@ -605,7 +605,12 @@ export class AplDebugSession extends LoggingDebugSession {
 				this.sendResponse(response); break;
 
 			case 'executeWithTrace':
-				this._runtime.executeWithTrace(args.expression);
+				try {
+					await this._runtime.executeAndWait(args.expression, 1);
+				} catch (e: any) {
+					response.success = false;
+					response.message = e.message;
+				}
 				this.sendResponse(response); break;
 
 			default:

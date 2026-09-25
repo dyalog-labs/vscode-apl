@@ -12,8 +12,8 @@ import type { ReplManager } from './replManager';
  * an injected DebugBridge, so an external client can drive the debugger
  * while the user watches the native UI. Flow/inspection commands never
  * enter the eval FIFO — `pause` must reach the interpreter while an eval
- * is stuck. `evaluate`/`setExpression` DO join the FIFO: they run APL on
- * the same interpreter, and interleaving them with a queued eval would
+ * is stuck. `evaluate`, `setExpression`, and `executeWithTrace` join the
+ * FIFO: they run APL on the same interpreter, and interleaving them would
  * attribute their output to the wrong client. Consequence: on a socket
  * that mixes evals and flow commands, replies may interleave — flow
  * replies are immediate while eval(-uate) replies wait for the queue.
@@ -53,7 +53,7 @@ const THREAD_DEFAULT_COMMANDS = new Set([
 // run between two queued evals and its output leak into the queued
 // client's reply. `start` stays out of band: launching through the FIFO
 // could deadlock behind a stuck eval.
-const SERIALIZED_COMMANDS = new Set(['evaluate', 'setExpression']);
+const SERIALIZED_COMMANDS = new Set(['evaluate', 'setExpression', 'executeWithTrace']);
 
 // Known HTTP method + ` HTTP/<digit>` trailer. Both are required so a stray
 // APL call like `GET 1 2 3` or `FOO bar HTTP/1` won't false-match.

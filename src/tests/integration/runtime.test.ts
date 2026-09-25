@@ -112,64 +112,147 @@ suite('EvalServer — debug evaluation completion', () => {
 		});
 	}
 
-	test('holds the FIFO through echo and output, but still allows pause', async () => {
+	for (const command of ['evaluate', 'executeWithTrace']) {
+		test(`${command} holds the FIFO through echo and output, but still allows pause`, async () => {
+			let received!: () => void;
+			const executing = new Promise<void>(resolve => { received = resolve; });
+			ride.onCommand('Execute', args => {
+				if (args.text === 'slow\n') { received(); return; }
+				ride.send('EchoInput', { input: args.text });
+				ride.send('AppendSessionOutput', { result: 'plain output' });
+				ride.send('SetPromptType', { type: 1 });
+			});
+			const socket = await connect();
+			let replied = false;
+			const results = replies(socket, 2);
+			socket.once('data', () => { replied = true; });
+			socket.write(`/debug ${command} {"expression":"slow","context":"repl"}\nplain\n`);
+			await executing;
+			assert.strictEqual(ride.getReceived('Execute')[0].trace, command === 'executeWithTrace' ? 1 : 0);
+
+			// A leftover prompt from preceding work must not complete this eval.
+			ride.send('SetPromptType', { type: 1 });
+			await new Promise(r => setTimeout(r, 60));
+			assert.strictEqual(replied, false, 'must not acknowledge before execution starts');
+			assert.deepStrictEqual(ride.getReceived('Execute').map(a => a.text), ['slow\n']);
+			ride.send('EchoInput', { input: 'slow\n' });
+			ride.send('AppendSessionOutput', { result: 'debug output' });
+			await new Promise(r => setTimeout(r, 60));
+			assert.strictEqual(replied, false, 'echo acknowledges receipt, not completion');
+			assert.deepStrictEqual(ride.getReceived('Execute').map(a => a.text), ['slow\n']);
+
+			const pauseSocket = await connect();
+			const pauseReply = replies(pauseSocket, 1);
+			const interrupted = new Promise<void>(resolve => ride.onCommand('StrongInterrupt', () => resolve()));
+			pauseSocket.write('/debug pause\n');
+			assert.deepStrictEqual(await pauseReply, ['{}']);
+			await interrupted;
+			pauseSocket.destroy();
+
+			ride.send('SetPromptType', { type: 1 });
+			const [debugReply, evalReply] = await results;
+			assert.deepStrictEqual(JSON.parse(debugReply), command === 'evaluate' ? { result: '', variablesReference: 0 } : {});
+			assert.strictEqual(evalReply, 'plain output', 'debug output must not leak to the following eval');
+			socket.destroy();
+		});
+	}
+
+	for (const ending of ['\n', '\n\n', '\r\n']) {
+		test(`evaluation ending in ${JSON.stringify(ending)} completes and releases the FIFO`, async () => {
+			ride.onCommand('Execute', args => {
+				// Dyalog echoes each nonempty line separately, even if Execute
+				// contains extra trailing newlines.
+				for (const line of args.text.replace(/\r\n/g, '\n').split('\n').slice(0, -1)) {
+					if (line) {
+						ride.send('EchoInput', { input: `${line}\n` });
+						ride.send('AppendSessionOutput', { result: line === 'plain' ? 'plain output' : '6' });
+					}
+					ride.send('SetPromptType', { type: 1 });
+				}
+			});
+			const socket = await connect();
+			const results = replies(socket, 2);
+			socket.write(`/debug evaluate ${JSON.stringify({ expression: `3+3${ending}`, context: 'repl' })}\nplain\n`);
+			const [debugReply, evalReply] = await results;
+			assert.deepStrictEqual(JSON.parse(debugReply), { result: '', variablesReference: 0 });
+			assert.strictEqual(evalReply, 'plain output');
+			socket.destroy();
+		});
+	}
+
+	test('multiline evaluation waits for the final line, including repeated lines', async () => {
 		let received!: () => void;
 		const executing = new Promise<void>(resolve => { received = resolve; });
 		ride.onCommand('Execute', args => {
-			if (args.text === 'slow\n') { received(); return; }
+			if (args.text.startsWith('1+1')) { received(); return; }
 			ride.send('EchoInput', { input: args.text });
 			ride.send('AppendSessionOutput', { result: 'plain output' });
 			ride.send('SetPromptType', { type: 1 });
 		});
 		const socket = await connect();
-		let replied = false;
 		const results = replies(socket, 2);
+		let replied = false;
 		socket.once('data', () => { replied = true; });
-		socket.write('/debug evaluate {"expression":"slow","context":"repl"}\nplain\n');
+		socket.write(`/debug evaluate ${JSON.stringify({ expression: '1+1\r\n\r\n1+1\r\n', context: 'repl' })}\nplain\n`);
 		await executing;
-
-		// A leftover prompt from preceding work must not complete this eval.
+		ride.send('EchoInput', { input: '1+1\n' });
+		ride.send('AppendSessionOutput', { result: '2\n' });
 		ride.send('SetPromptType', { type: 1 });
+		ride.send('SetPromptType', { type: 1 }); // blank line has no echo
 		await new Promise(r => setTimeout(r, 60));
-		assert.strictEqual(replied, false, 'must not acknowledge before execution starts');
-		assert.deepStrictEqual(ride.getReceived('Execute').map(a => a.text), ['slow\n']);
-		ride.send('EchoInput', { input: 'slow\n' });
-		ride.send('AppendSessionOutput', { result: 'debug output' });
-		await new Promise(r => setTimeout(r, 60));
-		assert.strictEqual(replied, false, 'echo acknowledges receipt, not completion');
-		assert.deepStrictEqual(ride.getReceived('Execute').map(a => a.text), ['slow\n']);
-
-		const pauseSocket = await connect();
-		const pauseReply = replies(pauseSocket, 1);
-		const interrupted = new Promise<void>(resolve => ride.onCommand('StrongInterrupt', () => resolve()));
-		pauseSocket.write('/debug pause\n');
-		assert.deepStrictEqual(await pauseReply, ['{}']);
-		await interrupted;
-		pauseSocket.destroy();
-
+		assert.strictEqual(replied, false, 'an intermediate prompt must not release the FIFO');
+		assert.strictEqual(ride.getReceived('Execute').length, 1);
+		// Dyalog indents the echo of subsequent lines in a single Execute.
+		ride.send('EchoInput', { input: '      1+1\n' });
+		ride.send('AppendSessionOutput', { result: '2\n' });
 		ride.send('SetPromptType', { type: 1 });
 		const [debugReply, evalReply] = await results;
 		assert.deepStrictEqual(JSON.parse(debugReply), { result: '', variablesReference: 0 });
-		assert.strictEqual(evalReply, 'plain output', 'debug output must not leak to the following eval');
+		assert.strictEqual(evalReply, 'plain output');
 		socket.destroy();
 	});
 
-	for (const end of ['disconnect', 'detach'] as const) {
-		test(`${end} rejects an unfinished evaluation and releases the FIFO`, async () => {
-			let received!: () => void;
-			const executing = new Promise<void>(resolve => { received = resolve; });
-			ride.onCommand('Execute', () => received());
-			const socket = await connect();
-			const result = replies(socket, 1);
-			socket.write('/debug evaluate {"expression":"slow","context":"repl"}\n');
-			await executing;
-			if (end === 'disconnect') { session.disconnect(); }
-			else { runtime.detachFromSession(); }
-			assert.match((await result)[0], /^\[Debug error:/);
-			assert.strictEqual((evalServer as any)._busy, false);
-			assert.strictEqual(session.listenerCount('ready'), 0);
-			socket.destroy();
+	test('executeWithTrace waits behind an in-flight plain evaluation', async () => {
+		let received!: () => void;
+		const executing = new Promise<void>(resolve => { received = resolve; });
+		ride.onCommand('Execute', args => {
+			if (args.text === 'slow\n') { received(); return; }
+			ride.send('EchoInput', { input: args.text });
+			ride.send('AppendSessionOutput', { result: args.text === 'plain\n' ? 'plain output' : 'trace output' });
+			ride.send('SetPromptType', { type: 1 });
 		});
+		const socket = await connect();
+		const results = replies(socket, 3);
+		socket.write('slow\n/debug executeWithTrace {"expression":"traced"}\nplain\n');
+		await executing;
+		await new Promise(r => setTimeout(r, 60));
+		assert.deepStrictEqual(ride.getReceived('Execute').map(a => a.text), ['slow\n']);
+		ride.send('EchoInput', { input: 'slow\n' });
+		ride.send('AppendSessionOutput', { result: 'slow output' });
+		ride.send('SetPromptType', { type: 1 });
+		assert.deepStrictEqual(await results, ['slow output', '{}', 'plain output']);
+		assert.deepStrictEqual(ride.getReceived('Execute').map(a => a.text), ['slow\n', 'traced\n', 'plain\n']);
+		socket.destroy();
+	});
+
+	for (const command of ['evaluate', 'executeWithTrace']) {
+		for (const end of ['disconnect', 'detach'] as const) {
+			test(`${end} rejects an unfinished ${command} and releases the FIFO`, async () => {
+				let received!: () => void;
+				const executing = new Promise<void>(resolve => { received = resolve; });
+				ride.onCommand('Execute', () => received());
+				const socket = await connect();
+				const result = replies(socket, 1);
+				socket.write(`/debug ${command} {"expression":"slow","context":"repl"}\n`);
+				await executing;
+				if (end === 'disconnect') { session.disconnect(); }
+				else { runtime.detachFromSession(); }
+				assert.match((await result)[0], /^\[Debug error:/);
+				assert.strictEqual((evalServer as any)._busy, false);
+				assert.strictEqual(session.listenerCount('ready'), 0);
+				socket.destroy();
+			});
+		}
 	}
 });
 

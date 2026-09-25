@@ -110,8 +110,8 @@ export class AplRuntime extends EventEmitter {
 	private _echoReceived = new PendingRequest<void>();
 	private _execTimeoutMs = 10000;
 	private _pendingExecutions = new Set<{
-		text: string;
-		echoSeen: boolean;
+		lines: string[];
+		echoesSeen: number;
 		cancel: (error: Error) => void;
 	}>();
 	private _windows: OpenWindowMessage[] = [];
@@ -354,8 +354,14 @@ export class AplRuntime extends EventEmitter {
 	}
 
 	private echoInput(x: EchoInputMessage) {
+		// Dyalog echoes multiline Execute requests one line at a time,
+		// adding prompt indentation to subsequent lines. Blank lines have
+		// no echo. Also accept a combined echo (e.g. from the mock backend).
+		const lines = x.input.replace(/\r\n?/g, '\n').split('\n').map(line => line.trim()).filter(Boolean);
 		for (const execution of this._pendingExecutions) {
-			if (x.input === execution.text) { execution.echoSeen = true; }
+			if (lines.every((line, i) => line === execution.lines[execution.echoesSeen + i])) {
+				execution.echoesSeen += lines.length;
+			}
 		}
 		if (x.input === this._executeText) {
 			this._echoReceived.resolve(undefined);
@@ -534,11 +540,15 @@ export class AplRuntime extends EventEmitter {
 	}
 
 	/** Wait for the evaluation's prompt, not just its receipt by Dyalog. */
-	public executeAndWait(expr: string): Promise<void> {
+	public executeAndWait(expr: string, trace: number = 0): Promise<void> {
 		const session = this._session;
 		if (!session?.isConnected) {
 			return Promise.reject(new Error('No connected interpreter for evaluation'));
 		}
+		// exec adds the final newline. Extra blank lines would produce extra
+		// prompts after completion, potentially completing the next eval.
+		expr = expr.replace(/\r\n?/g, '\n').trimEnd();
+		if (!expr.trim()) { return Promise.resolve(); }
 		return new Promise<void>((resolve, reject) => {
 			const cleanup = () => {
 				this._pendingExecutions.delete(execution);
@@ -548,9 +558,9 @@ export class AplRuntime extends EventEmitter {
 				session.removeListener('error', onError);
 			};
 			const onReady = () => {
-				// Ignore any prompt left over from a previous command. EchoInput
-				// identifies this command, but precedes its output/completion.
-				if (!execution.echoSeen) { return; }
+				// Ignore preceding and intermediate prompts. Every submitted
+				// line must be echoed before its final prompt can complete us.
+				if (execution.echoesSeen !== execution.lines.length) { return; }
 				cleanup();
 				resolve();
 			};
@@ -559,13 +569,17 @@ export class AplRuntime extends EventEmitter {
 			const onStateChanged = (state: string) => {
 				if (state === 'disconnected') { onEnd(); }
 			};
-			const execution = { text: `${expr}\n`, echoSeen: false, cancel: onError };
+			const execution = {
+				lines: expr.split('\n').map(line => line.trim()).filter(Boolean),
+				echoesSeen: 0,
+				cancel: onError,
+			};
 			this._pendingExecutions.add(execution);
 			session.on('ready', onReady);
 			session.on('stateChanged', onStateChanged);
 			session.on('end', onEnd);
 			session.on('error', onError);
-			void this.exec(0, expr).catch(onError);
+			void this.exec(trace, expr).catch(onError);
 		});
 	}
 

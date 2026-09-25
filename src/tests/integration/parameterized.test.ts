@@ -83,6 +83,28 @@ for (const backendType of getBackends()) {
 			await (backend.runtime as any).exec(0, '1+1', 1);
 		});
 
+		test('executeAndWait completes newline, multiline and blank inputs', async () => {
+			for (const [expression, expected] of [
+				['3+3\n', '6'],
+				['3+3\n\n', '6'],
+				['3+3\r\n', '6'],
+				['1+1\r\n\r\n1+1\r\n', '2\n2'],
+				['  \r\n', ''],
+			]) {
+				let output = '';
+				const onOutput = (text: string) => { output += text; };
+				backend.session.on('output', onOutput);
+				try {
+					await backend.runtime.executeAndWait(expression);
+					if (backend.type === 'dyalog') {
+						assert.strictEqual(output.trim(), expected, `output must be complete for ${JSON.stringify(expression)}`);
+					}
+				} finally {
+					backend.session.removeListener('output', onOutput);
+				}
+			}
+		});
+
 		test('execute produces output', async () => {
 			const output = await backend.execute('2+3');
 			assert.ok(output.length > 0, `should produce output, got: "${output}"`);

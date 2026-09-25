@@ -302,6 +302,46 @@ suite('VsCodeDebugBridge', () => {
 			assert.deepStrictEqual(await Promise.all([first, second]), [body, body]);
 		});
 
+		test('concurrent files wait independently for their own adapter response', async () => {
+			const { tracker } = setup_();
+			const argsA = { source: { path: FILE }, breakpoints: [{ line: 2 }] };
+			const argsB = { source: { path: '/ws/src/Bar.aplf' }, breakpoints: [{ line: 3 }] };
+			let firstSettled = false;
+			const first = bridge.request('setBreakpoints', argsA);
+			void first.then(() => { firstSettled = true; });
+			const second = bridge.request('setBreakpoints', argsB);
+			const duplicate = bridge.request('setBreakpoints', argsA);
+			let duplicateSettled = false;
+			void duplicate.then(() => { duplicateSettled = true; });
+			await new Promise(r => setImmediate(r));
+			assert.strictEqual(firstSettled, false, 'changing B must not release A before propagation');
+			assert.strictEqual(duplicateSettled, false, 'identical A requests must still share its pending propagation');
+
+			tracker.onWillReceiveMessage({ type: 'request', seq: 1, command: 'setBreakpoints', arguments: argsA });
+			tracker.onWillReceiveMessage({ type: 'request', seq: 2, command: 'setBreakpoints', arguments: argsB });
+			const bodyB = { breakpoints: [{ id: 3, line: 3, verified: true }] };
+			tracker.onDidSendMessage({ type: 'response', request_seq: 2, command: 'setBreakpoints', success: true, body: bodyB });
+			assert.deepStrictEqual(await second, bodyB);
+			assert.strictEqual(firstSettled, false, 'B completing must not release A');
+			assert.strictEqual(duplicateSettled, false);
+			const bodyA = { breakpoints: [{ id: 2, line: 2, verified: true }] };
+			tracker.onDidSendMessage({ type: 'response', request_seq: 1, command: 'setBreakpoints', success: true, body: bodyA });
+			assert.deepStrictEqual(await Promise.all([first, duplicate]), [bodyA, bodyA]);
+		});
+
+		test('dispose settles every pending file', async () => {
+			setup_();
+			bridge.propagationTimeoutMs = 5000;
+			const pending = [FILE, '/ws/src/Bar.aplf'].map(path => bridge.request('setBreakpoints', {
+				source: { path }, breakpoints: [{ line: 2 }],
+			}));
+			bridge.dispose();
+			assert.deepStrictEqual(await Promise.all(pending), [
+				{ breakpoints: [{ line: 2, verified: false }] },
+				{ breakpoints: [{ line: 2, verified: false }] },
+			]);
+		});
+
 		test('unrelated adapter traffic does not release the reply', async () => {
 			const { tracker } = setup_();
 			(bridge as any).propagationTimeoutMs = 200;

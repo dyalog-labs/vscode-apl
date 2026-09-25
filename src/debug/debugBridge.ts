@@ -20,15 +20,14 @@ export class VsCodeDebugBridge extends EventEmitter implements DebugBridge {
 	/** How long setBreakpoints waits for adapter propagation before
 	 *  falling back to the optimistic reply. Tests shrink this. */
 	public propagationTimeoutMs = 2000;
-	/** In-flight setBreakpoints barrier (at most one). */
-	private _bpWaiter?: {
-		path: string;
+	/** Independent propagation barriers for each source file. */
+	private _bpWaiters = new Map<string, {
 		lines: number[];
 		reply: Promise<unknown>;
 		seq?: number;
 		settled: boolean;
 		settle: (body?: unknown) => void;
-	};
+	}>();
 
 	constructor() {
 		super();
@@ -55,11 +54,10 @@ export class VsCodeDebugBridge extends EventEmitter implements DebugBridge {
 							// Removals can send intermediate (including empty)
 							// sets; only acknowledge the requested replacement.
 							if (session !== this._session) { return; }
-							const w = this._bpWaiter;
-							if (w && w.seq === undefined
-								&& msg?.type === 'request' && msg.command === 'setBreakpoints'
-								&& msg.arguments?.source?.path
-								&& vscode.Uri.file(msg.arguments.source.path).fsPath === w.path) {
+							if (msg?.type !== 'request' || msg.command !== 'setBreakpoints'
+								|| !msg.arguments?.source?.path) { return; }
+							const w = this._bpWaiters.get(vscode.Uri.file(msg.arguments.source.path).fsPath);
+							if (w && w.seq === undefined) {
 								const specs = msg.arguments.breakpoints ?? [];
 								if (Array.isArray(specs)) {
 									const lines = [...new Set<number>(specs.map(b => b.line))].sort((a, b) => a - b);
@@ -75,11 +73,13 @@ export class VsCodeDebugBridge extends EventEmitter implements DebugBridge {
 							// in another session's stopped/terminated events
 							// would have clients stepping the wrong session.
 							if (session !== this._session) { return; }
-							const w = this._bpWaiter;
-							if (w && w.seq !== undefined
-								&& msg?.type === 'response' && msg.command === 'setBreakpoints'
-								&& msg.request_seq === w.seq) {
-								w.settle(msg.body);
+							if (msg?.type === 'response' && msg.command === 'setBreakpoints') {
+								for (const w of this._bpWaiters.values()) {
+									if (w.seq !== undefined && msg.request_seq === w.seq) {
+										w.settle(msg.body);
+										break;
+									}
+								}
 							}
 							if (msg?.type === 'event') { this.emit('dap', msg); }
 						},
@@ -90,7 +90,10 @@ export class VsCodeDebugBridge extends EventEmitter implements DebugBridge {
 				if (s.type === 'apl' && !this._session) { this._session = s; }
 			}),
 			vscode.debug.onDidTerminateDebugSession((s) => {
-				if (s === this._session) { this._session = undefined; }
+				if (s === this._session) {
+					this._session = undefined;
+					for (const w of this._bpWaiters.values()) { w.settle(); }
+				}
 			}),
 		);
 	}
@@ -161,21 +164,20 @@ export class VsCodeDebugBridge extends EventEmitter implements DebugBridge {
 		// Nothing to change → VS Code sends the adapter nothing; waiting
 		// would only burn the timeout.
 		if (removals.length === 0 && additions.length === 0) {
-			const pending = this._bpWaiter;
-			if (pending?.path === uri.fsPath && targetLines.length === pending.lines.length
+			const pending = this._bpWaiters.get(uri.fsPath);
+			if (pending && targetLines.length === pending.lines.length
 				&& targetLines.every((line, i) => line === pending.lines[i])) {
 				return pending.reply;
 			}
 			return optimistic;
 		}
 
-		// One barrier at a time — a newcomer releases its predecessor.
-		this._bpWaiter?.settle(undefined);
+		// A replacement supersedes only the pending change for this file.
+		this._bpWaiters.get(uri.fsPath)?.settle(undefined);
 		let resolve!: (body: unknown) => void;
 		const reply = new Promise<unknown>(r => { resolve = r; });
 		let timer: NodeJS.Timeout;
 		const waiter = {
-			path: uri.fsPath,
 			lines: targetLines,
 			reply,
 			seq: undefined as number | undefined,
@@ -184,12 +186,12 @@ export class VsCodeDebugBridge extends EventEmitter implements DebugBridge {
 				if (waiter.settled) { return; }
 				waiter.settled = true;
 				clearTimeout(timer);
-				if (this._bpWaiter === waiter) { this._bpWaiter = undefined; }
+				if (this._bpWaiters.get(uri.fsPath) === waiter) { this._bpWaiters.delete(uri.fsPath); }
 				resolve(body ?? optimistic);
 			},
 		};
 		timer = setTimeout(() => waiter.settle(undefined), this.propagationTimeoutMs);
-		this._bpWaiter = waiter;
+		this._bpWaiters.set(uri.fsPath, waiter);
 
 		// Install the waiter BEFORE touching the model: propagation can be
 		// synchronous-ish and must not race past us.
@@ -200,7 +202,7 @@ export class VsCodeDebugBridge extends EventEmitter implements DebugBridge {
 	}
 
 	public dispose(): void {
-		this._bpWaiter?.settle(undefined);
+		for (const w of this._bpWaiters.values()) { w.settle(); }
 		for (const d of this._disposables) { d.dispose(); }
 		this._disposables = [];
 		this.removeAllListeners();
