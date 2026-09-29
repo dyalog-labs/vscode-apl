@@ -1282,6 +1282,113 @@ suite('AplDebugSession — setBreakpoints uses args.breakpoints', () => {
 	});
 });
 
+// ─── setBreakpoints with ≥2 lines must not deadlock on shared echo state ───
+//
+// setBreakPointsRequest fans its per-line setBreakPoint calls out with
+// Promise.all. Each awaits an echo through the single shared _executeText /
+// _echoReceived pair, so two concurrent execs orphan the first's echo promise:
+// it never resolves, Promise.all never settles, and the response is never sent.
+// (Live symptom on the /debug bridge: the reply falls back to the 2s optimistic
+// timeout with verified:false. The breakpoints are still installed — ⎕STOP is
+// sent before the hung await — only the reply is wrong.)
+suite('AplDebugSession — setBreakpoints with multiple lines', () => {
+	let server: MockRideServer;
+	let session: AplSession;
+	let debugSession: AplDebugSession;
+
+	setup(async () => {
+		server = new MockRideServer();
+		await server.start();
+		session = new AplSession();
+		const readyPromise = new Promise<void>(resolve => {
+			session.once('ready', resolve);
+		});
+		await session.connect('127.0.0.1', server.port);
+		await readyPromise;
+
+		debugSession = new AplDebugSession(mockFileAccessor);
+		(debugSession as any).sendResponse = () => {};
+		const runtime = (debugSession as any)._runtime;
+		(runtime as any)._session = session;
+		// Keep any orphaned echo timers from lingering past the test.
+		(runtime as any)._execTimeoutMs = 1000;
+		session.setDebugHandler((command: string, args: any) => {
+			(runtime as any).handleMessage([command, args]);
+		});
+		seedLinkInfo(session, [
+			{ aplName: 'MyFunc', filePath: '/test/file.aplf', startLine: 0 }
+		]);
+	});
+
+	teardown(() => {
+		session.clearDebugHandler();
+		session.disconnect();
+		server.stop();
+	});
+
+	// Fails the test (instead of hanging the suite) if the request never resolves.
+	async function withHangGuard<T>(p: Promise<T>, ms = 2500): Promise<T> {
+		const hung = Symbol('hung');
+		const result = await Promise.race([
+			p.then(v => v as T | typeof hung),
+			new Promise<typeof hung>(resolve => setTimeout(() => resolve(hung), ms)),
+		]);
+		assert.notStrictEqual(result, hung,
+			'setBreakPointsRequest did not resolve — concurrent exec echo collision');
+		return result as T;
+	}
+
+	test('two breakpoints on one file resolve, both verified with ids', async function () {
+		const response = { body: {} } as any;
+		const args = {
+			source: { path: '/test/file.aplf' },
+			breakpoints: [{ line: 3 }, { line: 4 }],
+		};
+
+		await withHangGuard((debugSession as any).setBreakPointsRequest(response, args));
+
+		const bps = response.body.breakpoints;
+		assert.strictEqual(bps.length, 2, 'both breakpoints returned');
+		assert.ok(bps.every((b: any) => b.verified === true),
+			`both breakpoints verified, got: ${JSON.stringify(bps)}`);
+		assert.ok(bps.every((b: any) => typeof b.id === 'number'),
+			`both breakpoints have ids, got: ${JSON.stringify(bps)}`);
+	});
+
+	test('single breakpoint still resolves verified (regression)', async function () {
+		const response = { body: {} } as any;
+		const args = {
+			source: { path: '/test/file.aplf' },
+			breakpoints: [{ line: 3 }],
+		};
+
+		await withHangGuard((debugSession as any).setBreakPointsRequest(response, args));
+
+		const bps = response.body.breakpoints;
+		assert.strictEqual(bps.length, 1);
+		assert.strictEqual(bps[0].verified, true);
+		assert.strictEqual(typeof bps[0].id, 'number');
+	});
+
+	test('final ⎕STOP carries the full line set', async function () {
+		const response = { body: {} } as any;
+		const args = {
+			source: { path: '/test/file.aplf' },
+			breakpoints: [{ line: 3 }, { line: 4 }],
+		};
+
+		await withHangGuard((debugSession as any).setBreakPointsRequest(response, args));
+
+		const stopCmds = server.getReceived('Execute')
+			.filter((m: any) => m.text.includes('⎕STOP') && !m.text.includes('⍬'));
+		const lastStop = stopCmds[stopCmds.length - 1];
+		assert.ok(lastStop, 'should have sent ⎕STOP');
+		// Client 3→debugger 2→offset 2, client 4→debugger 3→offset 3.
+		assert.ok(/(^|\D)2(\D|$)/.test(lastStop.text) && /(^|\D)3(\D|$)/.test(lastStop.text),
+			`final ⎕STOP should carry both offsets 2 and 3, got: ${lastStop.text}`);
+	});
+});
+
 // ─── Interrupt (pause) ──────────────────────────────────────────────
 
 suite('AplRuntime — interrupt', () => {
