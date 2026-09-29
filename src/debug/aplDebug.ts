@@ -295,14 +295,18 @@ export class AplDebugSession extends LoggingDebugSession {
 		// clear all breakpoints for this file
 		await this._runtime.clearBreakpoints(path);
 
-		// set and verify breakpoint locations
-		const actualBreakpoints0 = clientLines.map(async l => {
+		// Set and verify breakpoint locations one at a time. setBreakPoint
+		// awaits an interpreter echo through the runtime's single shared
+		// _executeText/_echoReceived pair, so running these concurrently would
+		// orphan all but the last echo promise — the request would then never
+		// resolve. Serialize to keep each echo matched to its own Execute.
+		const actualBreakpoints: DebugProtocol.Breakpoint[] = [];
+		for (const l of clientLines) {
 			const { verified, line, id } = await this._runtime.setBreakPoint(path, this.convertClientLineToDebugger(l));
 			const bp = new Breakpoint(verified, this.convertDebuggerLineToClient(line)) as DebugProtocol.Breakpoint;
 			bp.id = id;
-			return bp;
-		});
-		const actualBreakpoints = await Promise.all<DebugProtocol.Breakpoint>(actualBreakpoints0);
+			actualBreakpoints.push(bp);
+		}
 
 		// send back the actual breakpoint positions
 		response.body = {
