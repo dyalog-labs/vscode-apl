@@ -339,6 +339,25 @@ suite('EvalServer /debug', () => {
 			assert.match(reply, /^\[Debug error:/);
 			assert.deepStrictEqual(bridge.requests, []);
 		});
+
+		for (const command of ['evaluate', 'setExpression', 'executeWithTrace']) {
+			test(`malformed ${command} arguments are rejected before forwarding`, async () => {
+				for (const args of ['', 'null', '[]', 'true', '42', '"text"', '{}',
+					'{"expression":null}', '{"expression":42}', '{"expression":[]}']) {
+					const reply = await send(`/debug ${command} ${args}`);
+					assert.match(reply, /^\[Debug error:/, `${command} ${args} must be rejected`);
+				}
+				assert.deepStrictEqual(bridge.requests, [], 'invalid arguments must not reach the adapter');
+			});
+		}
+
+		test('malformed setExpression values are rejected before forwarding', async () => {
+			for (const value of [undefined, null, 42, []]) {
+				const reply = await send(`/debug setExpression ${JSON.stringify({ expression: 'x', value })}`);
+				assert.match(reply, /^\[Debug error:/);
+			}
+			assert.deepStrictEqual(bridge.requests, []);
+		});
 	});
 
 	// ─────────────────────────────────────────────────────────────────────
@@ -474,6 +493,26 @@ suite('EvalServer /debug', () => {
 	suite('evaluate serialization', () => {
 		setup(() => { bridge.active = true; });
 
+		test('a malformed evaluation is rejected even while the FIFO is busy', async () => {
+			session.autoReady = false;
+			const evalSock = await connect(port);
+			const started = new Promise<void>(resolve => {
+				const execute = session.execute.bind(session);
+				session.execute = expr => { execute(expr); resolve(); };
+			});
+			evalSock.write('slow\n');
+			await started;
+
+			assert.match(await send('/debug evaluate null'), /^\[Debug error:/);
+			assert.deepStrictEqual(bridge.requests, []);
+			assert.deepStrictEqual(session.executed, ['slow']);
+			const result = readMessages(evalSock, 1);
+			session.emit('output', 'done');
+			session.emit('ready');
+			assert.deepStrictEqual(await result, ['done']);
+			evalSock.destroy();
+		});
+
 		test('/debug evaluate waits for the in-flight eval to finish', async () => {
 			session.autoReady = false; // hold the first eval open
 
@@ -603,6 +642,31 @@ suite('EvalServer /debug', () => {
 	// ─────────────────────────────────────────────────────────────────────
 
 	suite('listener lifecycle', () => {
+		test('repeated listen commands keep one subscription and one cleanup handler', async () => {
+			const sock = await connect(port);
+			sock.write('/debug listen\n');
+			assert.deepStrictEqual(await readMessages(sock, 1), ['[Listening]']);
+			const sockets: Set<Net.Socket> = (server as any)._sockets;
+			const [peer] = [...sockets];
+			const closeListeners = peer.listenerCount('close');
+
+			const acknowledgements = readMessages(sock, 5);
+			sock.write('/debug listen\n'.repeat(5));
+			assert.deepStrictEqual(await acknowledgements, Array(5).fill('[Listening]'));
+			assert.strictEqual(peer.listenerCount('close'), closeListeners, 're-subscribing must not retain more handlers');
+			assert.strictEqual(bridge.listenerCount('dap'), 1);
+
+			const events = readMessages(sock, 2);
+			bridge.emit('dap', { type: 'event', event: 'stopped' });
+			bridge.emit('dap', { type: 'event', event: 'continued' });
+			assert.deepStrictEqual((await events).map(msg => JSON.parse(msg).event), ['stopped', 'continued']);
+
+			const closed = new Promise<void>(resolve => peer.once('close', () => resolve()));
+			sock.destroy();
+			await closed;
+			assert.strictEqual(bridge.listenerCount('dap'), 0, 'disconnect must still remove the subscription');
+		});
+
 		test('bridge subscription is dropped when the last listener disconnects', async () => {
 			const sock = await connect(port);
 			sock.write('/debug listen\n');

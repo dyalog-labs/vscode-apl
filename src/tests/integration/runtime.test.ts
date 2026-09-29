@@ -112,6 +112,45 @@ suite('EvalServer — debug evaluation completion', () => {
 		});
 	}
 
+	test('malformed evaluations return errors and leave the FIFO usable', async () => {
+		ride.onCommand('Execute', args => {
+			ride.send('EchoInput', { input: args.text });
+			ride.send('AppendSessionOutput', { result: '2' });
+			ride.send('SetPromptType', { type: 1 });
+		});
+		const socket = await connect();
+		const results = replies(socket, 4);
+		socket.write('/debug evaluate null\n/debug evaluate\n/debug evaluate {"context":"repl"}\n1+1\n');
+		const messages = await results;
+		for (const message of messages.slice(0, 3)) {
+			assert.match(message, /^\[Debug error:/);
+		}
+		assert.strictEqual(messages[3], '2');
+		assert.deepStrictEqual(ride.getReceived('Execute').map(args => args.text), ['1+1\n']);
+		socket.destroy();
+	});
+
+	test('malformed DAP evaluate requests receive error responses from the adapter', async () => {
+		// Bypass the TCP validation to exercise the real DAP dispatcher, which
+		// does not await async handlers or catch their rejected promises.
+		for (const args of [undefined, null, [], true, 42, 'text', {},
+			{ expression: null }, { expression: 42 }, { expression: [] }]) {
+			await assert.rejects(bridge.request('evaluate', args), /expression.*string/);
+		}
+		assert.deepStrictEqual(ride.getReceived('Execute'), []);
+	});
+
+	test('failed hover evaluation returns an error and releases the FIFO', async () => {
+		runtime.getValueTip = async () => { throw new Error('value tip failed'); };
+		const socket = await connect();
+		const results = replies(socket, 2);
+		socket.write('/debug evaluate {"expression":"x","context":"hover"}\n/debug evaluate {"expression":"","context":"repl"}\n');
+		const [error, next] = await results;
+		assert.strictEqual(error, '[Debug error: value tip failed]');
+		assert.deepStrictEqual(JSON.parse(next), { result: '', variablesReference: 0 });
+		socket.destroy();
+	});
+
 	for (const command of ['evaluate', 'executeWithTrace']) {
 		test(`${command} holds the FIFO through echo and output, but still allows pause`, async () => {
 			let received!: () => void;

@@ -535,24 +535,29 @@ export class AplDebugSession extends LoggingDebugSession {
 			variablesReference: 0
 		};
 
-		if (args.context === 'repl') {
-			try {
+		// The DAP dispatcher does not await async handlers. Always translate
+		// invalid arguments and runtime failures into a response for callers.
+		try {
+			if (typeof args?.expression !== 'string') {
+				throw new Error('evaluate requires expression to be a string');
+			}
+			if (args.context === 'repl') {
 				await this._runtime.executeAndWait(args.expression);
-			} catch (e: any) {
-				response.success = false;
-				response.message = e.message;
+			} else if (args.context === 'hover') {
+				const win = args.frameId || 0;
+				const token = request?.seq || win;
+				const column = 0;
+				const valueTip = await this._runtime.getValueTip(args.expression, column, token, win);
+				if (valueTip && valueTip.tip) {
+					const kind = classMap(valueTip.class);
+					response.body.result = valueTip.tip.join('\n');
+					response.body.type = kind;
+					response.body.presentationHint = { kind };
+				}
 			}
-		} else if (args.context === 'hover') {
-			const win = args.frameId || 0;
-			const token = request?.seq || win;
-			const column = 0;
-			const valueTip = await this._runtime.getValueTip(args.expression, column, token, win);
-			if (valueTip && valueTip.tip) {
-				const kind = classMap(valueTip.class);
-				response.body.result = valueTip.tip.join('\n');
-				response.body.type = kind;
-				response.body.presentationHint = { kind };
-			}
+		} catch (e) {
+			response.success = false;
+			response.message = e instanceof Error ? e.message : String(e);
 		}
 
 		this.sendResponse(response);

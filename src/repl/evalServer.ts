@@ -371,6 +371,18 @@ export class EvalServer {
 					args = { threadId: 1 };
 				}
 				if (SERIALIZED_COMMANDS.has(sub)) {
+					// Reject malformed evaluations before they can hold the FIFO
+					// waiting for a response from an async DAP request handler.
+					if (!args || typeof args !== 'object' || Array.isArray(args)) {
+						return `[Debug error: ${sub} requires an arguments object]`;
+					}
+					const fields = args as Record<string, unknown>;
+					if (typeof fields.expression !== 'string') {
+						return `[Debug error: ${sub} requires expression to be a string]`;
+					}
+					if (sub === 'setExpression' && typeof fields.value !== 'string') {
+						return '[Debug error: setExpression requires value to be a string]';
+					}
 					// Hold the FIFO slot until the debug evaluation settles;
 					// the connection handler writes the reply when we resolve.
 					return new Promise<string>((resolve) => {
@@ -401,6 +413,7 @@ export class EvalServer {
 	 * server nobody debugs through never touches the bridge.
 	 */
 	private addDebugListener(socket: Net.Socket): void {
+		if (this._debugListeners.has(socket)) { return; }
 		this._debugListeners.add(socket);
 		socket.once('close', () => {
 			this._debugListeners.delete(socket);
