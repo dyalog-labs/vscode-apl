@@ -64,7 +64,7 @@ $ APL_EVAL_PORT=4502 bin/aple '2+2'   # port must match apl.evalServer.port
 
 ## Build and Run
 
-* Clone the project: `git clone https://github.com/martanit/vscode-apl.git`
+* Clone the project: `git clone https://github.com/dyalog-labs/vscode-apl.git`
 * Open the project folder in VS Code.
 * Run `npm install` to install dependencies.
 * Press `F5` to build and launch the extension in another VS Code window.

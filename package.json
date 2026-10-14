@@ -1,13 +1,13 @@
 {
   "name": "vscode-apl",
   "publisher": "dyalog-labs",
-  "displayName": "APL for VS Code",
+  "displayName": "APL for Visual Studio Code",
   "version": "0.1.0",
-  "description": "APL VS Code integration.",
+  "description": "APL language support for Visual Studio Code.",
   "author": {
-    "email": "martina.alice.crippa@gmail.com",
+    "email": "martina@dyalog.com",
     "name": "Martina Crippa",
-    "url": "https://github.com/martanit/vscode-apl"
+    "url": "https://github.com/dyalog-labs/vscode-apl"
   },
   "license": "MIT",
   "keywords": [
@@ -23,10 +23,10 @@
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/martanit/vscode-apl.git"
+    "url": "https://github.com/dyalog-labs/vscode-apl.git"
   },
   "bugs": {
-    "url": "https://github.com/martanit/vscode-apl/issues"
+    "url": "https://github.com/dyalog-labs/vscode-apl/issues"
   },
   "scripts": {
     "compile": "tsc -p ./",
