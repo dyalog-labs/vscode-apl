@@ -52,7 +52,7 @@ async function getStackNames(session: vscode.DebugSession): Promise<string[]> {
 		assert.ok(folders && folders.length > 0);
 		workspaceFolder = folders![0];
 
-		const ext = vscode.extensions.getExtension('undefined_publisher.vscode-apl')!;
+		const ext = vscode.extensions.getExtension('dyalog-labs.vscode-apl')!;
 		if (!ext.isActive) { await ext.activate(); }
 		const api = ext.exports;
 
@@ -81,7 +81,7 @@ async function getStackNames(session: vscode.DebugSession): Promise<string[]> {
 			await vscode.debug.stopDebugging();
 		}
 		// Disconnect the REPL session
-		const ext = vscode.extensions.getExtension('undefined_publisher.vscode-apl');
+		const ext = vscode.extensions.getExtension('dyalog-labs.vscode-apl');
 		ext?.exports?.replManager?.activeTab?.disconnect();
 	});
 

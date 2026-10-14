@@ -1,5 +1,6 @@
 {
   "name": "vscode-apl",
+  "publisher": "dyalog-labs",
   "displayName": "APL for VS Code",
   "version": "0.1.0",
   "description": "APL VS Code integration.",

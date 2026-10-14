@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as path from 'path';
 import * as vscode from 'vscode';
 
-const EXT_ID = 'undefined_publisher.vscode-apl';
+const EXT_ID = 'dyalog-labs.vscode-apl';
 
 suite('Extension Host — activation', () => {
 
