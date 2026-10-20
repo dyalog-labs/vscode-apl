@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { AplSession } from '../session/aplSession';
-import { mapBreakpointsToStops } from '../session/linkBreakpoints';
+import { CLEAR_ALL_STOPS, mapBreakpointsToStops, packStatements, setStopsStatement } from '../session/linkBreakpoints';
 import { normPath } from '../utils';
 
 /**
@@ -96,7 +96,12 @@ export class ReplBreakpointSync implements vscode.Disposable {
 		}
 	}
 
-	private _syncBreakpointsForFile(filePath: string): void {
+	/**
+	 * Bring ⎕STOP for the file's functions in line with VS Code in as few
+	 * lines as possible: clears for functions without breakpoints (skipped
+	 * when CLEAR_ALL_STOPS just ran) and one set per function with them.
+	 */
+	private _syncBreakpointsForFile(filePath: string, clearOthers = true): void {
 		if (!this._session?.isConnected) { return; }
 
 		const linkInfo = this._session.linkInfo;
@@ -115,45 +120,43 @@ export class ReplBreakpointSync implements vscode.Disposable {
 			linkInfo,
 		);
 
-		// Find all APL functions mapped to this file
-		const allFunctions = new Set(
-			linkInfo
-				.filter(r => normPath(r.filePath) === normalizedPath)
-				.map(r => r.aplName)
-		);
-
-		// Clear stops on functions that no longer have breakpoints
-		// Use error guard (0::⍬) to skip non-stoppable items (namespaces, classes)
-		for (const aplName of allFunctions) {
-			if (!stops[aplName]) {
-				this._session.execute(`{0::⍬ ⋄ ⍬ ⎕STOP ⍵}'${aplName}'`);
-			}
+		const statements: string[] = [];
+		if (clearOthers) {
+			const toClear = new Set(
+				linkInfo
+					.filter(r => normPath(r.filePath) === normalizedPath && !stops[r.aplName])
+					.map(r => r.aplName)
+			);
+			for (const aplName of toClear) { statements.push(setStopsStatement(aplName, [])); }
+		}
+		for (const aplName of Object.keys(stops)) {
+			statements.push(setStopsStatement(aplName, stops[aplName]));
 		}
 
-		// Set stops on functions that have breakpoints
-		for (const aplName of Object.keys(stops)) {
-			const lines = stops[aplName].join(' ');
-			this._session.execute(`{0::⍬ ⋄ ${lines} ⎕STOP ⍵}'${aplName}'`);
+		for (const line of packStatements(statements)) {
+			this._session.execute(line);
 		}
 	}
 
+	/**
+	 * Full sync: one line clears the stops of every function the interpreter
+	 * loaded from a file, including those left by debugging or set by hand;
+	 * then the files with breakpoints are set.
+	 */
 	private _syncAllBreakpoints(): void {
 		if (!this._session?.isConnected) { return; }
-		const linkInfo = this._session.linkInfo;
-		if (linkInfo.length === 0) { return; }
+		if (this._session.linkInfo.length === 0) { return; }
 
-		// Include all linked files so stale ⎕STOP from debug sessions get cleared
-		const allFiles = new Set(
-			linkInfo.map(r => normPath(r.filePath))
-		);
+		this._session.execute(CLEAR_ALL_STOPS);
+
+		const filesWithBreakpoints = new Set<string>();
 		for (const bp of vscode.debug.breakpoints) {
 			if (bp instanceof vscode.SourceBreakpoint) {
-				allFiles.add(normPath(bp.location.uri.fsPath));
+				filesWithBreakpoints.add(normPath(bp.location.uri.fsPath));
 			}
 		}
-
-		for (const filePath of allFiles) {
-			this._syncBreakpointsForFile(filePath);
+		for (const filePath of filesWithBreakpoints) {
+			this._syncBreakpointsForFile(filePath, false);
 		}
 	}
 }
