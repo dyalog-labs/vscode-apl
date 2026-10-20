@@ -108,6 +108,9 @@ export class AplSession extends EventEmitter {
 	/** How long loadLinkInfo waits after a query got no reply before trying again. */
 	public linkInfoRetryDelayMs = 30000;
 
+	/** True while a failed query waits for its retry; implicit refreshes hold off. */
+	public get linkInfoBackingOff(): boolean { return Date.now() < this._linkInfoRetryAt; }
+
 	public get state(): ConnectionState {
 		return this._state;
 	}
@@ -401,7 +404,7 @@ export class AplSession extends EventEmitter {
 		if (this._linkInfoLoaded) { return; }
 		if (this._linkInfoLoading) { return this._linkInfoLoading; }
 		if (!folder || !this.isConnected) { return; }
-		if (Date.now() < this._linkInfoRetryAt) { return; }
+		if (this.linkInfoBackingOff) { return; }
 
 		this._linkInfoLoading = this._doLoadLinkInfo().finally(() => {
 			this._linkInfoLoading = undefined;

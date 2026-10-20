@@ -29,6 +29,8 @@ suite('ReplBreakpointSync — ⎕STOP lines sent to the interpreter', () => {
 		(vscode.debug as unknown as { breakpoints: vscode.Breakpoint[] }).breakpoints = bps;
 	}
 
+	const setOpenDocs = (docs: unknown[]) => { (vscode.workspace as any).textDocuments = docs; };
+
 	/** The texts of the Execute messages received, once the mock has been quiet for 150 ms. */
 	async function sent(): Promise<string[]> {
 		const count = () => server.getReceived('Execute').length;
@@ -62,6 +64,7 @@ suite('ReplBreakpointSync — ⎕STOP lines sent to the interpreter', () => {
 
 	teardown(() => {
 		setBreakpoints([]);
+		setOpenDocs([]);
 		sync.dispose();
 		session.disconnect();
 		server.stop();
@@ -125,6 +128,75 @@ suite('ReplBreakpointSync — ⎕STOP lines sent to the interpreter', () => {
 		(sync as any)._syncBreakpointsForFile(B);
 
 		assert.deepStrictEqual(await sent(), ["{}{0::0 ⋄ ⍬ ⎕STOP ⍵}'#.B'"]);
+	});
+
+	test('a breakpoint in an APL file the table does not know fetches the table again first', async () => {
+		let refreshes = 0;
+		session.refreshLinkInfo = async () => {
+			refreshes++;
+			seedLinkInfo(session, [...session.linkInfo, { aplName: '#.C', filePath: '/ws/C.aplf', startLine: 0 }]);
+		};
+		setOpenDocs([{ uri: vscode.Uri.file('/ws/C.aplf'), languageId: 'apl' }]);
+		const added = bp('/ws/C.aplf', 1);
+		setBreakpoints([added]);
+
+		await (sync as any)._onBreakpointsChanged({ added: [added], removed: [], changed: [] });
+
+		assert.strictEqual(refreshes, 1);
+		assert.deepStrictEqual(await sent(), ["{}{0::0 ⋄ 1 ⎕STOP ⍵}'#.C'"]);
+	});
+
+	test('a breakpoint in a file of another language neither fetches the table nor sends anything', async () => {
+		let refreshes = 0;
+		session.refreshLinkInfo = async () => { refreshes++; };
+		setOpenDocs([{ uri: vscode.Uri.file('/ws/notes.ts'), languageId: 'typescript' }]);
+		const added = bp('/ws/notes.ts', 1);
+		setBreakpoints([added]);
+
+		await (sync as any)._onBreakpointsChanged({ added: [added], removed: [], changed: [] });
+
+		assert.strictEqual(refreshes, 0);
+		assert.deepStrictEqual(await sent(), []);
+	});
+
+	test('a breakpoint in a known file uses the table as it is', async () => {
+		let refreshes = 0;
+		session.refreshLinkInfo = async () => { refreshes++; };
+		const added = bp(B, 1);
+		setBreakpoints([added]);
+
+		await (sync as any)._onBreakpointsChanged({ added: [added], removed: [], changed: [] });
+
+		assert.strictEqual(refreshes, 0);
+		assert.deepStrictEqual(await sent(), ["{}{0::0 ⋄ 1 ⎕STOP ⍵}'#.B'"]);
+	});
+
+	test('while a query that got no reply waits for its retry, an unknown file does not fetch the table again', async () => {
+		let refreshes = 0;
+		session.refreshLinkInfo = async () => { refreshes++; };
+		(session as any)._linkInfoRetryAt = Date.now() + 60000;
+		const added = bp('/ws/C.aplf', 1);
+		setBreakpoints([added]);
+
+		await (sync as any)._onBreakpointsChanged({ added: [added], removed: [], changed: [] });
+
+		assert.strictEqual(refreshes, 0);
+	});
+
+	test('breakpoints in apl: documents are not the file sync\'s business', async () => {
+		let refreshes = 0;
+		session.refreshLinkInfo = async () => { refreshes++; };
+		const added = new vscode.SourceBreakpoint({
+			uri: vscode.Uri.from({ scheme: 'apl', path: '/Session 1/foo.apl' }),
+			range: new vscode.Range(new vscode.Position(1, 0), new vscode.Position(1, 0)),
+		});
+		setBreakpoints([added]);
+
+		await (sync as any)._onBreakpointsChanged({ added: [added], removed: [], changed: [] });
+		(sync as any)._syncAllBreakpoints();
+
+		assert.strictEqual(refreshes, 0);
+		assert.deepStrictEqual(await sent(), [CLEAR_ALL_STOPS], 'the full sync sends only its clear line');
 	});
 
 	test('a file with hundreds of functions needs far fewer lines than functions, each within the limit', async () => {

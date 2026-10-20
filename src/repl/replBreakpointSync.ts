@@ -80,16 +80,22 @@ export class ReplBreakpointSync implements vscode.Disposable {
 	private async _onBreakpointsChanged(e: vscode.BreakpointsChangeEvent): Promise<void> {
 		if (!this._session?.isConnected || this._debugSessionActive) { return; }
 
-		// Ensure linkInfo is loaded — usually already done on session 'ready'.
-		await this._session.loadLinkInfo(this._folder);
-		if (this._session.linkInfo.length === 0) { return; }
-
 		const affectedFiles = new Set<string>();
 		for (const bp of [...e.added, ...e.removed, ...e.changed]) {
-			if (bp instanceof vscode.SourceBreakpoint) {
+			if (bp instanceof vscode.SourceBreakpoint && bp.location.uri.scheme === 'file') {
 				affectedFiles.add(normPath(bp.location.uri.fsPath));
 			}
 		}
+		if (affectedFiles.size === 0) { return; }
+
+		await this._session.loadLinkInfo(this._folder);
+		// An unknown APL file may have been fixed since the fetch: fetch again,
+		// unless the interpreter is not answering.
+		const known = new Set(this._session.linkInfo.map(r => normPath(r.filePath)));
+		if (!this._session.linkInfoBackingOff && [...affectedFiles].some(f => !known.has(f) && isAplDocument(f))) {
+			await this._session.refreshLinkInfo(this._folder);
+		}
+		if (this._session.linkInfo.length === 0) { return; }
 
 		for (const filePath of affectedFiles) {
 			this._syncBreakpointsForFile(filePath);
@@ -151,7 +157,7 @@ export class ReplBreakpointSync implements vscode.Disposable {
 
 		const filesWithBreakpoints = new Set<string>();
 		for (const bp of vscode.debug.breakpoints) {
-			if (bp instanceof vscode.SourceBreakpoint) {
+			if (bp instanceof vscode.SourceBreakpoint && bp.location.uri.scheme === 'file') {
 				filesWithBreakpoints.add(normPath(bp.location.uri.fsPath));
 			}
 		}
@@ -159,4 +165,9 @@ export class ReplBreakpointSync implements vscode.Disposable {
 			this._syncBreakpointsForFile(filePath, false);
 		}
 	}
+}
+
+/** Whether VS Code shows the file as APL; other languages are not Link's business. */
+function isAplDocument(path: string): boolean {
+	return vscode.workspace.textDocuments.some(d => d.languageId === 'apl' && normPath(d.uri.fsPath) === path);
 }
