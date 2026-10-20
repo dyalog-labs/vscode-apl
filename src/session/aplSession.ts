@@ -1,8 +1,6 @@
 import { EventEmitter } from 'events';
 import * as cp from 'child_process';
-import * as fs from 'fs';
 import * as Net from 'net';
-import * as os from 'os';
 import * as Path from 'path';
 import * as vscode from 'vscode';
 import { findDyalogExe } from './findDyalogExe';
@@ -14,6 +12,40 @@ export interface LinkInfoRow {
 	filePath: string;
 	startLine: number;
 }
+
+/**
+ * The Link table arrives as ShowHTML messages (3500⌶) whose payload is
+ * `<marker><query id>:<count>:<piece of JSON>`: the marker because not
+ * every interpreter accepts the caption argument, the id so a late reply
+ * to an earlier query is ignored. Pieces arrive in order.
+ */
+export const LINK_INFO_MARKER = 'vscode-apl:link-info:';
+const LINK_INFO_CHUNK_RE = /^vscode-apl:link-info:(\d+):(\d+):/;
+
+/**
+ * Characters per 3500⌶ call: its cost grows faster than the payload (300 KB
+ * never arrives), so a large table goes as many small messages.
+ */
+const LINK_INFO_CHUNK_SIZE = 10000;
+
+/**
+ * The query, one statement per line here, joined with ⋄ into one Execute:
+ * the loaded-file table (5177⌶) as JSON rows of [name parent file startLine],
+ * without ⎕SE rows, in pieces tagged with `id`; [] when nothing is linked.
+ */
+const linkInfoQuery = (id: number) => [
+	'{}{⎕IO ⎕ML←1 1',
+	// the table as text (refs → names); empty if Link is absent or unused
+	'r←⍕¨↑{6::⍬ ⋄ 0=≢⎕SE.Link.Links:⍬ ⋄ 5177⌶⍬}⍬',
+	// nothing loaded: ↑ gave a vector, so reply [] here
+	`0=≢r:3500⌶'${LINK_INFO_MARKER}${id}:1:[]'`,
+	// keep name parent file startLine; drop rows under ⎕SE
+	"r←r[;1 2 4 5]⌿⍨(⊂'⎕SE')≢¨3↑¨r[;2]",
+	// JSON of the rows in pieces of LINK_INFO_CHUNK_SIZE, each tagged with id and count
+	'json←⎕JSON↓r',
+	`chunks←json⊂⍨(≢json)⍴1,${LINK_INFO_CHUNK_SIZE - 1}⍴0`,
+	`{3500⌶'${LINK_INFO_MARKER}${id}:',(⍕≢chunks),':',⍵}¨chunks}⍬`,
+].join(' ⋄ ');
 
 /**
  * Manages a shared APL interpreter session via RIDE protocol.
@@ -41,27 +73,40 @@ export class AplSession extends EventEmitter {
 	private _isSuspended = false;
 	private _editWindowTokens = new Set<number>();
 
-	// Cached Link info — bulk-fetched once via 5177⌶, shared by AplRuntime,
-	// ReplBreakpointSync, and editWindowManager. Cleared on disconnect.
+	// The Link table, fetched once over RIDE (linkInfoQuery); cleared on disconnect.
 	private _linkInfo: LinkInfoRow[] = [];
 	private _linkMap = new Map<string, string>();
 	private _linkInfoLoading?: Promise<void>;
 	private _linkInfoLoaded = false;
 
-	// Per-session subdir name under <tmpdir>/vscode-apl/ — supplied by the
-	// owner (ReplTab) so link.json lives alongside the REPL's tracer +
-	// edit-window temp files, and concurrent sessions don't collide.
-	// Fallback counter for callers (tests) that don't supply one.
-	private static _fallbackId = 0;
-	private readonly _replId: string;
+	// Waiter for the in-flight 5177⌶ query (see _queryLinkInfo).
+	private _pendingLinkInfo?: {
+		id: number;
+		text: string;
+		started: () => void;
+		chunk: (data: string, total: number) => void;
+		abort: () => void;
+	};
+	private _linkInfoQueryId = 0;
+	// Set after a query got no reply: loadLinkInfo waits until then, so callers
+	// are not stalled on every breakpoint change. refreshLinkInfo ignores it.
+	private _linkInfoRetryAt = 0;
 
-	// One-shot echo waiter for awaitable Execute calls (loadLinkInfo).
-	private _pendingEcho?: { text: string; resolve: () => void };
+	/**
+	 * Longest the query may wait in the input queue before we give up. The
+	 * interpreter echoes a line when it starts on it; until then it may be
+	 * busy with earlier input, so this is generous.
+	 */
+	public linkInfoQueueTimeoutMs = 60000;
 
-	public constructor(replId?: string) {
-		super();
-		this._replId = replId ?? `session-${++AplSession._fallbackId}`;
-	}
+	/**
+	 * Longest silence once the interpreter has started on the query. The timer
+	 * restarts on every chunk, so only a lost reply times out.
+	 */
+	public linkInfoTimeoutMs = 5000;
+
+	/** How long loadLinkInfo waits after a query got no reply before trying again. */
+	public linkInfoRetryDelayMs = 30000;
 
 	public get state(): ConnectionState {
 		return this._state;
@@ -300,7 +345,8 @@ export class AplSession extends EventEmitter {
 		this._linkMap.clear();
 		this._linkInfoLoaded = false;
 		this._linkInfoLoading = undefined;
-		this._pendingEcho = undefined;
+		this._linkInfoRetryAt = 0;
+		this._pendingLinkInfo?.abort();
 		this.setState('disconnected');
 	}
 
@@ -355,8 +401,9 @@ export class AplSession extends EventEmitter {
 		if (this._linkInfoLoaded) { return; }
 		if (this._linkInfoLoading) { return this._linkInfoLoading; }
 		if (!folder || !this.isConnected) { return; }
+		if (Date.now() < this._linkInfoRetryAt) { return; }
 
-		this._linkInfoLoading = this._doLoadLinkInfo(folder).finally(() => {
+		this._linkInfoLoading = this._doLoadLinkInfo().finally(() => {
 			this._linkInfoLoading = undefined;
 		});
 		return this._linkInfoLoading;
@@ -365,42 +412,30 @@ export class AplSession extends EventEmitter {
 	/** Drop cached Link info and re-fetch. Used when Link state may have changed. */
 	public async refreshLinkInfo(folder: string): Promise<void> {
 		this._linkInfoLoaded = false;
+		this._linkInfoRetryAt = 0;
 		this._linkInfo = [];
 		this._linkMap.clear();
 		return this.loadLinkInfo(folder);
 	}
 
-	private async _doLoadLinkInfo(_folder: string): Promise<void> {
-		// Per-session scratch file under the same per-REPL temp dir that
-		// tracer + edit-window files use.  Concurrent sessions in the same
-		// workspace can't race on a shared link.json this way.
-		const linkDir = Path.join(os.tmpdir(), 'vscode-apl', this._replId);
-		const linkPath = Path.join(linkDir, 'link.json');
-		try { fs.mkdirSync(linkDir, { recursive: true }); } catch { /* ignore */ }
-		try { fs.unlinkSync(linkPath); } catch { /* ignore */ }
+	private async _doLoadLinkInfo(): Promise<void> {
+		const json = await this._queryLinkInfo();
+		// Disconnected while waiting: the cache was reset for the next connection; leave it.
+		if (!this.isConnected) { return; }
 
-		const aplPath = linkPath.replace(/\\/g, '/').replace(/'/g, "''");
-		// Guard with ⎕SE.Link.Links — 5177⌶ can return stale entries after
-		// unlinking. 6:: catches VALUE ERROR if the Link API is unavailable.
-		// Echo arrives on receipt, not completion — a no-op afterward gives
-		// a second echo that confirms the file write is done.
-		await this._executeAndAwaitEcho(
-			`{6::⍬ ⋄ 0=≢⎕SE.Link.Links:⍬ ⋄ r←5177⌶⍬ ⋄ 0=≢r:⍬ ⋄ (⊂⎕JSON ⍕¨¨r)⎕NPUT '${aplPath}' 1}⍬`
-		);
-		await this._executeAndAwaitEcho('⍬');
-
-		if (!fs.existsSync(linkPath)) {
-			this._linkInfoLoaded = true;
+		if (json === undefined) {
+			// Leave the cache unloaded so a later load tries again, after a pause.
+			this._linkInfoRetryAt = Date.now() + this.linkInfoRetryDelayMs;
+			this.log('No reply to Link info query — will try again later');
 			return;
 		}
 		try {
-			const json = fs.readFileSync(linkPath, 'utf-8');
+			// Rows are [name, parent, file, startLine] — see linkInfoQuery.
 			const rows: LinkInfoRow[] = JSON.parse(json)
-				.filter((row: string[]) => row[1] !== '⎕SE')
 				.map((row: string[]) => {
 					const aplName = row[0][0] === '#' ? row[0] : `${row[1]}.${row[0]}`;
-					const filePath = Path.resolve(row[3]);
-					const startLine = +row[4];
+					const filePath = Path.resolve(row[2]);
+					const startLine = +row[3];
 					return { aplName, filePath, startLine };
 				});
 			this._linkInfo = rows;
@@ -415,19 +450,41 @@ export class AplSession extends EventEmitter {
 		this._linkInfoLoaded = true;
 	}
 
-	private _executeAndAwaitEcho(expression: string, timeoutMs = 5000): Promise<void> {
-		const text = expression.endsWith('\n') ? expression : `${expression}\n`;
-		return new Promise<void>((resolve) => {
-			let done = false;
-			const finish = () => {
-				if (done) { return; }
-				done = true;
-				if (this._pendingEcho?.text === text) { this._pendingEcho = undefined; }
+	/**
+	 * Send the query and wait for its reply: ShowHTML pieces tagged with
+	 * LINK_INFO_MARKER and this id, routed here by handleMessage and joined.
+	 * Resolves with the JSON, or undefined after the queue or idle timeout or
+	 * a disconnect.
+	 */
+	private _queryLinkInfo(): Promise<string | undefined> {
+		return new Promise<string | undefined>((resolve) => {
+			const id = ++this._linkInfoQueryId;
+			const text = `${linkInfoQuery(id)}\n`;
+			const parts: string[] = [];
+			let timer: ReturnType<typeof setTimeout> | undefined;
+
+			const finish = (json?: string) => {
 				clearTimeout(timer);
-				resolve();
+				if (this._pendingLinkInfo === waiter) { this._pendingLinkInfo = undefined; }
+				resolve(json);
 			};
-			this._pendingEcho = { text, resolve: finish };
-			const timer = setTimeout(finish, timeoutMs);
+			const arm = (ms: number) => {
+				clearTimeout(timer);
+				timer = setTimeout(() => finish(), ms);
+			};
+			const waiter = {
+				id,
+				text,
+				started: () => arm(this.linkInfoTimeoutMs),
+				chunk: (data: string, total: number) => {
+					parts.push(data);
+					if (parts.length >= total) { finish(parts.join('')); } else { arm(this.linkInfoTimeoutMs); }
+				},
+				abort: () => finish(),
+			};
+
+			this._pendingLinkInfo = waiter;
+			arm(this.linkInfoQueueTimeoutMs);
 			this.sendMessage('Execute', { trace: 0, text });
 		});
 	}
@@ -543,6 +600,18 @@ export class AplSession extends EventEmitter {
 	}
 
 	private handleMessage(command: string, args: any): void {
+		// The Link-table reply (see _queryLinkInfo) is ours alone: not for the HTML viewer or the debugger.
+		if (command === 'ShowHTML' && typeof args?.html === 'string' && args.html.startsWith(LINK_INFO_MARKER)) {
+			const m = LINK_INFO_CHUNK_RE.exec(args.html);
+			const waiter = this._pendingLinkInfo;
+			if (m && waiter && +m[1] === waiter.id) {
+				waiter.chunk(args.html.slice(m[0].length), +m[2]);
+			} else if (m) {
+				this.log(`Ignoring link info reply for query ${m[1]} (waiting for ${waiter?.id ?? 'none'})`);
+			}
+			return;
+		}
+
 		// When debug handler is attached, forward ALL messages to it first
 		// This allows AplRuntime to process messages it needs (SetPromptType, EchoInput, etc.)
 		if (this._debugHandler) {
@@ -580,11 +649,10 @@ export class AplSession extends EventEmitter {
 				break;
 
 			case 'EchoInput': {
-				// Wake any one-shot echo waiter (loadLinkInfo) — runs alongside
-				// debug-handler forwarding so awaitable Executes work in any state.
-				const pending = this._pendingEcho;
-				if (pending && pending.text === args.input) {
-					pending.resolve();
+				// The interpreter echoes a line when it starts on it: the reply timer may begin.
+				const pendingLink = this._pendingLinkInfo;
+				if (pendingLink && pendingLink.text === args.input) {
+					pendingLink.started();
 				}
 				if (!this._debugHandler) {
 					this.emit('echo', args.input);

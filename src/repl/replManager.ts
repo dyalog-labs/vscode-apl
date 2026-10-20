@@ -71,7 +71,7 @@ export class ReplManager implements vscode.Disposable {
 		const replId = `repl-${num}-${Date.now()}`;
 		const label = `Session ${num}`;
 
-		const session = new AplSession(replId);
+		const session = new AplSession();
 		const tab = new ReplTab(replId, label, session, this);
 
 		this._tabs.set(replId, tab);
