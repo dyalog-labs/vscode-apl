@@ -6,6 +6,7 @@
 
 export const workspace = {
 	workspaceFolders: undefined as any,
+	textDocuments: [] as any[],
 	findFiles: async () => [],
 	openTextDocument: async () => ({}),
 	getConfiguration: () => ({
@@ -18,7 +19,9 @@ export const workspace = {
 		delete: async () => {}
 	},
 	asRelativePath: (p: any) => p,
-	onDidChangeBreakpoints: () => ({ dispose: () => {} })
+	onDidChangeBreakpoints: () => ({ dispose: () => {} }),
+	onDidSaveTextDocument: () => ({ dispose: () => {} }),
+	registerFileSystemProvider: () => ({ dispose: () => {} })
 };
 
 export const window = {
@@ -36,7 +39,12 @@ export const window = {
 		hide: () => {},
 		dispose: () => {}
 	}),
-	registerWebviewViewProvider: () => ({ dispose: () => {} })
+	registerWebviewViewProvider: () => ({ dispose: () => {} }),
+	tabGroups: {
+		all: [] as any[],
+		close: async () => true,
+		onDidChangeTabs: () => ({ dispose: () => {} })
+	}
 };
 
 export const commands = {
@@ -47,7 +55,7 @@ export const commands = {
 
 export const debug = {
 	activeDebugSession: undefined as any,
-	breakpoints: [],
+	breakpoints: [] as any[],
 	registerDebugConfigurationProvider: () => ({ dispose: () => {} }),
 	registerDebugAdapterDescriptorFactory: () => ({ dispose: () => {} }),
 	registerDebugAdapterTrackerFactory: () => ({ dispose: () => {} }),
@@ -65,20 +73,21 @@ export const languages = {
 };
 
 export class Uri {
-	readonly fsPath: string;
-	readonly scheme: string;
-	constructor(fsPath: string, scheme = 'file') {
-		this.fsPath = fsPath;
-		this.scheme = scheme;
+	constructor(readonly scheme: string, readonly path: string) {}
+	get fsPath() { return this.path; }
+	static file(path: string) { return new Uri('file', path); }
+	static from(c: { scheme: string; path?: string }) { return new Uri(c.scheme, c.path ?? ''); }
+	static parse(s: string) {
+		const m = /^([a-z][a-z0-9+.-]*):(?:\/\/[^/]*)?(.*)$/i.exec(s);
+		return m ? new Uri(m[1], m[2]) : Uri.file(s);
 	}
-	static file(path: string) { return new Uri(path); }
-	static parse(path: string) { return new Uri(path); }
 	static joinPath(base: Uri, ...parts: string[]) {
-		return new Uri([base.fsPath, ...parts].join('/'));
+		return new Uri(base.scheme, [base.path, ...parts].join('/'));
 	}
-	with(change: { scheme?: string }) {
-		return new Uri(this.fsPath, change.scheme || this.scheme);
+	with(change: { scheme?: string; path?: string }) {
+		return new Uri(change.scheme ?? this.scheme, change.path ?? this.path);
 	}
+	toString() { return `${this.scheme}:${this.scheme === 'file' ? '//' : ''}${this.path}`; }
 }
 
 export class Position {
@@ -130,6 +139,29 @@ export enum StatusBarAlignment {
 export class Disposable {
 	constructor(private _callOnDispose: () => void) {}
 	dispose() { this._callOnDispose(); }
+}
+
+export class EventEmitter<T> {
+	private _listeners: Array<(e: T) => void> = [];
+	event = (listener: (e: T) => void) => {
+		this._listeners.push(listener);
+		return new Disposable(() => { this._listeners = this._listeners.filter(l => l !== listener); });
+	};
+	fire(e: T) { for (const l of this._listeners) { l(e); } }
+	dispose() { this._listeners = []; }
+}
+
+export enum FileType { Unknown = 0, File = 1, Directory = 2, SymbolicLink = 64 }
+export enum FileChangeType { Changed = 1, Created = 2, Deleted = 3 }
+
+export class FileSystemError extends Error {
+	constructor(message?: string | Uri) { super(typeof message === 'string' ? message : message?.toString()); }
+	static FileNotFound(uri?: Uri) { return new FileSystemError(uri ?? 'FileNotFound'); }
+	static NoPermissions(uri?: Uri) { return new FileSystemError(uri ?? 'NoPermissions'); }
+}
+
+export class TabInputText {
+	constructor(readonly uri: Uri) {}
 }
 
 export class SourceBreakpoint {
