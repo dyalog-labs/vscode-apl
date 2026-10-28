@@ -85,6 +85,11 @@
     "request": "never"
   },
   "contributes": {
+    "configurationDefaults": {
+      "[apl]": {
+        "editor.unicodeHighlight.ambiguousCharacters": false
+      }
+    },
     "viewsContainers": {
       "panel": [
         {
