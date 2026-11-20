@@ -46,6 +46,9 @@ function teardownTestRuntime(session: AplSession, server: MockRideServer) {
 	server.stop();
 }
 
+/** Lets what the runtime just sent reach the mock server. */
+const delivered = () => new Promise(resolve => setTimeout(resolve, 50));
+
 // ─── Breakpoint handling ────────────────────────────────────────────
 
 suite('AplRuntime — breakpoint handling', () => {
@@ -65,6 +68,7 @@ suite('AplRuntime — breakpoint handling', () => {
 		]);
 
 		const bp = await runtime.setBreakPoint('/test/file.aplf', 6);
+		await delivered();
 
 		assert.strictEqual(bp.verified, true);
 		const stopCmd = server.getReceived('Execute').find((m: any) => m.text.includes('⎕STOP'));
@@ -87,6 +91,7 @@ suite('AplRuntime — breakpoint handling', () => {
 		]);
 
 		await runtime.setBreakPoint('/test/file.aplf', 13);
+		await delivered();
 
 		const stopCmd = server.getReceived('Execute').find((m: any) => m.text.includes('⎕STOP'));
 		assert.ok(stopCmd);
@@ -102,6 +107,7 @@ suite('AplRuntime — breakpoint handling', () => {
 		await runtime.setBreakPoint('/test/file.aplf', 2);
 		// Second setBreakPoint re-sends for all bps in the file
 		await runtime.setBreakPoint('/test/file.aplf', 5);
+		await delivered();
 
 		// The last ⎕STOP should include both lines
 		const stopCmds = server.getReceived('Execute').filter((m: any) => m.text.includes('⎕STOP'));
@@ -118,6 +124,7 @@ suite('AplRuntime — breakpoint handling', () => {
 
 		await runtime.setBreakPoint('/test/file.aplf', 5);
 		await runtime.setBreakPoint('/test/file.aplf', 25);
+		await delivered();
 
 		const stopCmds = server.getReceived('Execute')
 			.filter((m: any) => m.text.includes('⎕STOP') && !m.text.includes('⍬'));
@@ -143,9 +150,11 @@ suite('AplRuntime — breakpoint handling', () => {
 
 		await runtime.setBreakPoint('/test/file.aplf', 5);
 		await runtime.setBreakPoint('/test/file.aplf', 25);
+		await delivered();
 
 		const countBefore = server.received.length;
 		await runtime.clearBreakpoints('/test/file.aplf');
+		await delivered();
 
 		const newMsgs = server.received.slice(countBefore);
 		const clearCmds = newMsgs
@@ -177,6 +186,53 @@ suite('AplRuntime — breakpoint handling', () => {
 		const bp1 = await runtime.setBreakPoint('/test/file.aplf', 5);
 		const bp2 = await runtime.setBreakPoint('/test/file.aplf', 5);
 		assert.strictEqual(bp1.id, bp2.id, 'same line should return same breakpoint');
+	});
+});
+
+// ─── Breakpoints without an echo ────────────────────────────────────
+
+suite('AplRuntime — breakpoints do not wait for an echo', () => {
+	let server: MockRideServer;
+	let session: AplSession;
+	let runtime: AplRuntime;
+
+	setup(async () => {
+		({ server, session, runtime } = await createTestRuntime());
+		// No echo: a busy interpreter echoes a line only when it gets to it, if at all.
+		server.onCommand('Execute', () => {});
+	});
+
+	teardown(() => teardownTestRuntime(session, server));
+
+	/** Whether `p` settles within 500 ms, far short of the 10 s echo timeout. */
+	const settles = (p: Promise<unknown>) => Promise.race([
+		p.then(() => true),
+		new Promise<boolean>(resolve => setTimeout(() => resolve(false), 500)),
+	]);
+
+	const executed = async () => {
+		await delivered();
+		return server.getReceived('Execute').map((m: any) => m.text);
+	};
+
+	test('a breakpoint is sent and verified without waiting for its echo', async () => {
+		seedLinkInfo(session, [{ aplName: 'Fn1', filePath: '/test/file.aplf', startLine: 0 }]);
+
+		const pending = runtime.setBreakPoint('/test/file.aplf', 2);
+
+		assert.ok(await settles(pending), 'setBreakPoint waited for an echo');
+		assert.ok((await pending).verified);
+		assert.deepStrictEqual(await executed(), ["{}2 ⎕STOP 'Fn1'\n"]);
+	});
+
+	test('clearing a file\'s breakpoints does not wait either', async () => {
+		seedLinkInfo(session, [
+			{ aplName: 'Fn1', filePath: '/test/file.aplf', startLine: 0 },
+			{ aplName: 'Fn2', filePath: '/test/file.aplf', startLine: 20 },
+		]);
+
+		assert.ok(await settles(runtime.clearBreakpoints('/test/file.aplf')), 'clearBreakpoints waited for an echo');
+		assert.deepStrictEqual(await executed(), ["{}⍬ ⎕STOP 'Fn1'\n", "{}⍬ ⎕STOP 'Fn2'\n"]);
 	});
 });
 
@@ -1019,6 +1075,7 @@ suite('AplDebugSession — setBreakpoints uses args.breakpoints', () => {
 		};
 
 		await (debugSession as any).setBreakPointsRequest(response, args);
+		await delivered();
 
 		const stopCmds = server.getReceived('Execute')
 			.filter((m: any) => m.text.includes('⎕STOP') && !m.text.includes('⍬'));

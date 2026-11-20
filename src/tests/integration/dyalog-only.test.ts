@@ -73,6 +73,42 @@ const skip = !process.env.DYALOG_TESTS || !isDyalogAvailable();
 		const output = await backend.execute('ClearMe 10');
 		assert.ok(output.trim().includes('11'), `should get result 11, got: "${output.trim()}"`);
 	});
+
+	test('a breakpoint set while the interpreter is busy does not wait, and is there once it is free', async () => {
+		const { filePath, startLine } = await backend.defineFunction('BusyStop', [
+			'r←BusyStop x',
+			'r←x+1',
+		]);
+
+		const busy = new Promise<void>(resolve => {
+			const onState = (state: string) => {
+				if (state !== 'busy') { return; }
+				backend.session.removeListener('stateChanged', onState);
+				resolve();
+			};
+			backend.session.on('stateChanged', onState);
+		});
+		backend.session.execute('⎕DL 3');
+		await busy;
+
+		const started = Date.now();
+		const bp = await backend.runtime.setBreakPoint(filePath, startLine + 1);
+		const waited = Date.now() - started;
+		assert.ok(waited < 1000, `setBreakPoint waited ${waited} ms for the busy interpreter`);
+		assert.ok(bp.verified, 'breakpoint should be verified');
+
+		// Queued behind ⎕DL and the stop: the call suspends on it.
+		const stopped = new Promise<boolean>(resolve => {
+			backend.runtime.once('stopOnStep', () => resolve(true));
+			backend.runtime.once('stopOnBreakpoint', () => resolve(true));
+			setTimeout(() => resolve(false), 8000);
+		});
+		backend.session.execute('BusyStop 5');
+		assert.ok(await stopped, 'the call should have suspended at the breakpoint');
+
+		backend.runtime.continue();
+		await new Promise(resolve => setTimeout(resolve, 500));
+	});
 });
 
 (skip ? suite.skip : suite)('Real Dyalog — exception info', () => {

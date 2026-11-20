@@ -222,7 +222,6 @@ export class AplRuntime extends EventEmitter {
 	}
 
 	private async initialiseBreakpoints() {
-		// Set breakpoints sequentially — exec can only track one echo at a time
 		for (const [filePath, bps] of this._breakPoints) {
 			await this.setBreakPointOnFile(bps, filePath);
 		}
@@ -789,9 +788,11 @@ export class AplRuntime extends EventEmitter {
 			filePath,
 			linkInfo,
 		);
+		// Not waited for: the interpreter runs its input in order, and a busy one
+		// echoes a line only when it gets to it, if it echoes at all.
 		for (const aplName of Object.keys(stops)) {
 			const lines = stops[aplName].join(' ');
-			await this.exec(0, `{}${lines} ⎕STOP '${aplName}'`, 1);
+			await this.exec(0, `{}${lines} ⎕STOP '${aplName}'`);
 		}
 		for (const bp of matched) {
 			bp.verified = true;
@@ -824,7 +825,7 @@ export class AplRuntime extends EventEmitter {
 		// Clear stops on ALL functions in this file, not just one
 		for (const row of this._session?.linkInfo ?? []) {
 			if (normPath(row.filePath) === filePath) {
-				await this.exec(0, `{}⍬ ⎕STOP '${row.aplName}'`, 1);
+				await this.exec(0, `{}⍬ ⎕STOP '${row.aplName}'`);
 			}
 		}
 	}
