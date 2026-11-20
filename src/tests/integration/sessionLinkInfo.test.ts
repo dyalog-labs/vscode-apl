@@ -351,7 +351,24 @@ suite('AplSession — link info loading', () => {
 			'concurrent loadLinkInfo calls should share one query');
 	});
 
-	test('refreshLinkInfo clears cached state and re-fetches', async () => {
+	test('a refresh that gets no reply keeps the table it had, and the next one replaces it', async () => {
+		setupLinkQueryHandler(server, [row('Foo', '#', `${WS}/Foo.aplf`)]);
+		await connect();
+		await session.loadLinkInfo(WS);
+
+		setupLinkQueryHandler(server, null, { swallow: true });
+		session.linkInfoQueueTimeoutMs = 100;
+		await session.refreshLinkInfo(WS);
+
+		assert.deepStrictEqual(session.linkInfo.map(r => r.aplName), ['#.Foo']);
+		assert.ok(await session.getLinkedFile('#.Foo'), 'lookups keep working');
+
+		setupLinkQueryHandler(server, [row('Bar', '#', `${WS}/Bar.aplf`)]);
+		await session.refreshLinkInfo(WS);
+		assert.deepStrictEqual(session.linkInfo.map(r => r.aplName), ['#.Bar']);
+	});
+
+	test('refreshLinkInfo replaces the table with a fresh fetch', async () => {
 		setupLinkQueryHandler(server, [row('Foo', '#', `${WS}/Foo.aplf`)]);
 		await connect();
 		await session.loadLinkInfo(WS);
@@ -390,6 +407,36 @@ suite('AplSession — link info loading', () => {
 		assert.strictEqual(session.linkInfo.length, 0);
 
 		// A fresh connection must fetch again, not be marked loaded by the stale query.
+		setupLinkQueryHandler(server, [row('Foo', '#', `${WS}/Foo.aplf`)]);
+		await connect();
+		await session.loadLinkInfo(WS);
+		assert.strictEqual(session.linkInfo.length, 1, 'next connection loads the table');
+	});
+
+	test('the table is dropped when the interpreter goes away, as on disconnect', async () => {
+		setupLinkQueryHandler(server, [row('Foo', '#', `${WS}/Foo.aplf`)]);
+		await connect();
+		await session.loadLinkInfo(WS);
+
+		server.hangUp();
+		assert.ok(await waitFor(() => session.state === 'disconnected'), 'session noticed');
+
+		assert.strictEqual(session.linkInfo.length, 0);
+	});
+
+	test('the interpreter going away while a query is pending resolves it and does not poison the next load', async () => {
+		setupLinkQueryHandler(server, null);   // never replies
+		await connect();
+
+		const pending = session.loadLinkInfo(WS);
+		assert.ok(await waitFor(() => linkQueries(server).length === 1), 'query was sent');
+
+		const start = Date.now();
+		server.hangUp();
+		await pending;
+		assert.ok(Date.now() - start < 1000, 'pending load resolves promptly when the interpreter goes away');
+
+		// A fresh connection fetches at once: no dead query to wait for, no back-off.
 		setupLinkQueryHandler(server, [row('Foo', '#', `${WS}/Foo.aplf`)]);
 		await connect();
 		await session.loadLinkInfo(WS);

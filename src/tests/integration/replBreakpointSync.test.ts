@@ -143,7 +143,59 @@ suite('ReplBreakpointSync — ⎕STOP lines sent to the interpreter', () => {
 		await (sync as any)._onBreakpointsChanged({ added: [added], removed: [], changed: [] });
 
 		assert.strictEqual(refreshes, 1);
-		assert.deepStrictEqual(await sent(), ["{}{0::0 ⋄ 1 ⎕STOP ⍵}'#.C'"]);
+		assert.deepStrictEqual(await sent(), [CLEAR_ALL_STOPS, "{}{0::0 ⋄ 1 ⎕STOP ⍵}'#.C'"]);
+	});
+
+	test('a fetch that changes the table syncs every file, not only the one that changed', async () => {
+		seedLinkInfo(session, []);   // connected before anything was linked
+		const rows = [...session.linkInfo, { aplName: '#.A.goo', filePath: A, startLine: 10 }, { aplName: '#.B', filePath: B, startLine: 0 }];
+		session.refreshLinkInfo = async () => { seedLinkInfo(session, rows); };
+		setOpenDocs([{ uri: vscode.Uri.file(A), languageId: 'apl' }]);
+		const added = bp(A, 12);
+		setBreakpoints([added, bp(B, 1)]);
+
+		await (sync as any)._onBreakpointsChanged({ added: [added], removed: [], changed: [] });
+
+		const lines = await sent();
+		assert.strictEqual(lines[0], CLEAR_ALL_STOPS);
+		assert.ok(lines.includes("{}{0::0 ⋄ 2 ⎕STOP ⍵}'#.A.goo'"), 'the changed file is set');
+		assert.ok(lines.includes("{}{0::0 ⋄ 1 ⎕STOP ⍵}'#.B'"), 'so is the file whose breakpoint was already there');
+	});
+
+	test('a fetch that finds nothing new syncs only the file that changed', async () => {
+		session.refreshLinkInfo = async () => { seedLinkInfo(session, [...session.linkInfo]); };
+		setOpenDocs([{ uri: vscode.Uri.file('/ws/scratch.apl'), languageId: 'apl' }]);
+		const added = bp('/ws/scratch.apl', 1);
+		setBreakpoints([added, bp(B, 1)]);
+
+		await (sync as any)._onBreakpointsChanged({ added: [added], removed: [], changed: [] });
+
+		assert.deepStrictEqual(await sent(), [], 'an unlinked file has nothing to set, and the rest is left alone');
+	});
+
+	test('the session going away during the fetch ends the change quietly', async () => {
+		session.refreshLinkInfo = async () => { sync.detachFromSession(); };
+		setOpenDocs([{ uri: vscode.Uri.file('/ws/C.aplf'), languageId: 'apl' }]);
+		const added = bp('/ws/C.aplf', 1);
+		setBreakpoints([added]);
+
+		await (sync as any)._onBreakpointsChanged({ added: [added], removed: [], changed: [] });
+
+		assert.deepStrictEqual(await sent(), []);
+	});
+
+	test('a debug session that starts during the fetch keeps the sync out of its way', async () => {
+		session.refreshLinkInfo = async () => {
+			seedLinkInfo(session, [...session.linkInfo, { aplName: '#.C', filePath: '/ws/C.aplf', startLine: 0 }]);
+			(sync as any)._debugSessionActive = true;
+		};
+		setOpenDocs([{ uri: vscode.Uri.file('/ws/C.aplf'), languageId: 'apl' }]);
+		const added = bp('/ws/C.aplf', 1);
+		setBreakpoints([added]);
+
+		await (sync as any)._onBreakpointsChanged({ added: [added], removed: [], changed: [] });
+
+		assert.deepStrictEqual(await sent(), []);
 	});
 
 	test('a breakpoint in a file of another language neither fetches the table nor sends anything', async () => {
