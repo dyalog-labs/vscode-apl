@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { AplSession } from '../session/aplSession';
+import type { AplSession, LinkInfoRow } from '../session/aplSession';
 import { CLEAR_ALL_STOPS, mapBreakpointsToStops, packStatements, setStopsStatement } from '../session/linkBreakpoints';
 import { normPath } from '../utils';
 
@@ -78,7 +78,8 @@ export class ReplBreakpointSync implements vscode.Disposable {
 	// --- Private ---
 
 	private async _onBreakpointsChanged(e: vscode.BreakpointsChangeEvent): Promise<void> {
-		if (!this._session?.isConnected || this._debugSessionActive) { return; }
+		const session = this._session;
+		if (!session?.isConnected || this._debugSessionActive) { return; }
 
 		const affectedFiles = new Set<string>();
 		for (const bp of [...e.added, ...e.removed, ...e.changed]) {
@@ -88,15 +89,22 @@ export class ReplBreakpointSync implements vscode.Disposable {
 		}
 		if (affectedFiles.size === 0) { return; }
 
-		await this._session.loadLinkInfo(this._folder);
+		const before = session.linkInfo;
+		await session.loadLinkInfo(this._folder);
 		// An unknown APL file may have been fixed since the fetch: fetch again,
 		// unless the interpreter is not answering.
-		const known = new Set(this._session.linkInfo.map(r => normPath(r.filePath)));
-		if (!this._session.linkInfoBackingOff && [...affectedFiles].some(f => !known.has(f) && isAplDocument(f))) {
-			await this._session.refreshLinkInfo(this._folder);
+		const known = new Set(session.linkInfo.map(r => normPath(r.filePath)));
+		if (!session.linkInfoBackingOff && [...affectedFiles].some(f => !known.has(f) && isAplDocument(f))) {
+			await session.refreshLinkInfo(this._folder);
 		}
-		if (this._session.linkInfo.length === 0) { return; }
+		// A fetch can take a minute: the session may be gone by now, or a debugger attached.
+		if (this._session !== session || !session.isConnected || this._debugSessionActive) { return; }
 
+		// A table that changed may have moved any file's breakpoints, not only these.
+		if (!sameRows(before, session.linkInfo)) {
+			this._syncAllBreakpoints();
+			return;
+		}
 		for (const filePath of affectedFiles) {
 			this._syncBreakpointsForFile(filePath);
 		}
@@ -165,6 +173,11 @@ export class ReplBreakpointSync implements vscode.Disposable {
 			this._syncBreakpointsForFile(filePath, false);
 		}
 	}
+}
+
+function sameRows(a: readonly LinkInfoRow[], b: readonly LinkInfoRow[]): boolean {
+	return a.length === b.length && a.every((r, i) =>
+		r.aplName === b[i].aplName && r.filePath === b[i].filePath && r.startLine === b[i].startLine);
 }
 
 /** Whether VS Code shows the file as APL; other languages are not Link's business. */

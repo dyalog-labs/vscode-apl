@@ -344,12 +344,6 @@ export class AplSession extends EventEmitter {
 		this._pendingDebugMessages = [];
 		this._isSuspended = false;
 		this._editWindowTokens.clear();
-		this._linkInfo = [];
-		this._linkMap.clear();
-		this._linkInfoLoaded = false;
-		this._linkInfoLoading = undefined;
-		this._linkInfoRetryAt = 0;
-		this._pendingLinkInfo?.abort();
 		this.setState('disconnected');
 	}
 
@@ -412,12 +406,13 @@ export class AplSession extends EventEmitter {
 		return this._linkInfoLoading;
 	}
 
-	/** Drop cached Link info and re-fetch. Used when Link state may have changed. */
+	/**
+	 * Fetch the table again, for when Link state may have changed. The table
+	 * in hand stays until the reply replaces it, so a lost reply costs nothing.
+	 */
 	public async refreshLinkInfo(folder: string): Promise<void> {
 		this._linkInfoLoaded = false;
 		this._linkInfoRetryAt = 0;
-		this._linkInfo = [];
-		this._linkMap.clear();
 		return this.loadLinkInfo(folder);
 	}
 
@@ -504,6 +499,15 @@ export class AplSession extends EventEmitter {
 	private setState(state: ConnectionState): void {
 		if (this._state !== state) {
 			this._state = state;
+			if (state === 'disconnected') {
+				// However the connection ended: the table and a query in flight went with it.
+				this._linkInfo = [];
+				this._linkMap.clear();
+				this._linkInfoLoaded = false;
+				this._linkInfoLoading = undefined;
+				this._linkInfoRetryAt = 0;
+				this._pendingLinkInfo?.abort();
+			}
 			this.emit('stateChanged', state);
 		}
 	}
