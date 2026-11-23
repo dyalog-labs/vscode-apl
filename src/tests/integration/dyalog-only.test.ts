@@ -111,6 +111,34 @@ const skip = !process.env.DYALOG_TESTS || !isDyalogAvailable();
 		await new Promise(resolve => setTimeout(resolve, 500));
 	});
 
+	test('opening another function in the editor while suspended does not swallow Continue', async () => {
+		const inner = await backend.defineFunction('EditInner', ['r←EditInner x', 'r←x×2']);
+		const outer = await backend.defineFunction('EditOuter', ['r←EditOuter x', 'r←x+1', 'r←EditInner r']);
+		await backend.runtime.setBreakPoint(outer.filePath, outer.startLine + 1);
+
+		const within = (event: string) => new Promise<boolean>(resolve => {
+			backend.runtime.once(event, () => resolve(true));
+			setTimeout(() => resolve(false), 5000);
+		});
+		let stopped = within('stopOnBreakpoint');
+		backend.session.execute('EditOuter 5');
+		assert.ok(await stopped, 'should have stopped in EditOuter');
+
+		// What go to definition sends: the interpreter answers with an edit window.
+		const opened = within('openWindow');
+		backend.session.sendMessage('Edit', { win: 0, pos: 0, text: 'EditInner' });
+		assert.ok(await opened, 'the interpreter should have opened EditInner in an editor');
+		await backend.runtime.setBreakPoint(inner.filePath, inner.startLine + 1);
+
+		stopped = within('stopOnBreakpoint');
+		backend.runtime.continue();
+		assert.ok(await stopped, 'Continue should have run on to the stop in EditInner');
+		assert.ok(backend.runtime.currentWindow?.name.includes('EditInner'), 'should be suspended in EditInner');
+
+		backend.runtime.continue();
+		await new Promise(resolve => setTimeout(resolve, 500));
+	});
+
 	test('a debug session started on a suspension outlives Continue into a stop in another function', async () => {
 		const inner = await backend.defineFunction('StopInner', ['r←StopInner x', 'r←x×2']);
 		const outer = await backend.defineFunction('StopOuter', ['r←StopOuter x', 'r←x+1', 'r←StopInner r']);

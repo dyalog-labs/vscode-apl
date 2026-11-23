@@ -396,8 +396,10 @@ export class AplRuntime extends EventEmitter {
 			this.sendEvent('stopOnStep');
 		}
 	}
+	/** Record a window. Only a tracer becomes the one Continue and the steps act on, never an edit window. */
 	private updateWindow(x: OpenWindowMessage) {
 		this._windows[x.token] = x;
+		if (x.debugger) { this._winId = x.token; }
 	}
 	private replySaveChanges(x: ReplySaveChangesMessage) {
 		if (x.err) {
@@ -422,8 +424,8 @@ export class AplRuntime extends EventEmitter {
 		this.sendEvent('closeWindow', { filename });
 	}
 
-	private _hasOpenWindows(): boolean {
-		return Object.keys(this._windows).length > 0;
+	private _hasOpenTracer(): boolean {
+		return Object.values(this._windows).some(w => w.debugger);
 	}
 
 
@@ -450,8 +452,7 @@ export class AplRuntime extends EventEmitter {
 				stops: x.stop ?? [],
 			});
 		}
-		this._windows[x.token] = x;
-		this._winId = x.token;
+		this.updateWindow(x);
 		const filename = Path.resolve(x.filename);
 		this.sendEvent('openWindow', { filename });
 		this.verifyBreakpoints(filename, x.stop);
@@ -505,7 +506,7 @@ export class AplRuntime extends EventEmitter {
 	 * closes the tracer before it reaches the next stop.
 	 */
 	private endAutoDebugIfDone(): void {
-		if (this._autoDebug && !this._hasOpenWindows() && this._session?.state !== 'busy') {
+		if (this._autoDebug && !this._hasOpenTracer() && this._session?.state !== 'busy') {
 			this._autoDebug = false;
 			this.sendEvent('end');
 		}

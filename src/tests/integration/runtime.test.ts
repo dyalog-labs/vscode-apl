@@ -261,6 +261,7 @@ suite('AplRuntime — window management', () => {
 			stop: [],
 			trace: [],
 			monitor: [],
+			debugger: 1,
 		});
 
 		await new Promise(resolve => setTimeout(resolve, 50));
@@ -271,6 +272,37 @@ suite('AplRuntime — window management', () => {
 		assert.strictEqual(events.length, 1);
 	});
 
+	test('an edit window opening while suspended does not take Continue away from the tracer', async () => {
+		server.send('OpenWindow', {
+			token: 1, name: 'Outer', filename: 'Outer.aplf', text: ['Outer', 'Inner'], stop: [], trace: [], monitor: [], debugger: 1,
+		});
+		// What the interpreter answers to Edit (go to definition): an editor, not a tracer.
+		server.send('OpenWindow', {
+			token: 2, name: 'Inner', filename: 'Inner.aplf', text: ['Inner'], stop: [], trace: [], monitor: [], debugger: 0,
+		});
+		await delivered();
+
+		runtime.continue();
+		await delivered();
+
+		assert.deepStrictEqual(server.getReceived('Continue'), [{ win: 1 }]);
+		assert.strictEqual(runtime.currentWindow!.name, 'Outer');
+	});
+
+	test('a tracer that was already open when debugging started is the one Continue acts on', async () => {
+		// No OpenWindow: the interpreter only updates the tracer it already has.
+		server.send('UpdateWindow', {
+			token: 1, name: 'Outer', filename: 'Outer.aplf', text: ['Outer', 'Inner'], stop: [], trace: [], monitor: [], debugger: 1,
+		});
+		server.send('SetHighlightLine', { win: 1, line: 1 });
+		await delivered();
+
+		runtime.continue();
+		await delivered();
+
+		assert.deepStrictEqual(server.getReceived('Continue'), [{ win: 1 }]);
+	});
+
 	test('CloseWindow removes window and emits event', async () => {
 		const closeEvents: any[] = [];
 		runtime.on('closeWindow', (e: any) => closeEvents.push(e));
@@ -278,7 +310,7 @@ suite('AplRuntime — window management', () => {
 		// Open a window first
 		server.send('OpenWindow', {
 			token: 1, name: 'Fn', filename: 'Fn.aplf',
-			text: ['Fn'], stop: [], trace: [], monitor: [],
+			text: ['Fn'], stop: [], trace: [], monitor: [], debugger: 1,
 		});
 		await new Promise(resolve => setTimeout(resolve, 50));
 		assert.ok(runtime.currentWindow);
@@ -419,6 +451,19 @@ suite('AplRuntime — auto-debug lifetime', () => {
 		await status(1);
 
 		assert.deepStrictEqual(events, []);
+	});
+
+	test('an edit window left open does not keep it going after the run finishes', async () => {
+		tracer('Outer');
+		server.send('OpenWindow', {
+			token: 2, name: 'Inner', filename: 'Inner.aplf', text: ['Inner'], stop: [], trace: [], monitor: [], debugger: 0,
+		});
+		server.send('CloseWindow', { win: 1 });
+		server.send('SetPromptType', { type: 0 });
+		server.send('SetPromptType', { type: 1 });
+		await status(0);
+
+		assert.deepStrictEqual(events, ['end']);
 	});
 
 	test('statuses while it attaches to the suspension do not end it', async () => {
@@ -918,18 +963,18 @@ suite('AplRuntime — multiple windows', () => {
 	test('windows are indexed by token, not sequential', async () => {
 		server.send('OpenWindow', {
 			token: 100, name: 'A', filename: 'A.aplf',
-			text: ['A'], stop: [], trace: [], monitor: [],
+			text: ['A'], stop: [], trace: [], monitor: [], debugger: 1,
 		});
 		server.send('OpenWindow', {
 			token: 500, name: 'B', filename: 'B.aplf',
-			text: ['B'], stop: [], trace: [], monitor: [],
+			text: ['B'], stop: [], trace: [], monitor: [], debugger: 1,
 		});
 		await new Promise(resolve => setTimeout(resolve, 50));
 
 		assert.strictEqual((runtime as any)._windows[100].name, 'A');
 		assert.strictEqual((runtime as any)._windows[500].name, 'B');
 		assert.strictEqual((runtime as any)._windows[200], undefined);
-		// Current window is the last one opened
+		// Current window is the last tracer opened
 		assert.strictEqual(runtime.currentWindow!.name, 'B');
 		assert.strictEqual(runtime.winId, 500);
 	});
@@ -975,21 +1020,6 @@ suite('AplRuntime — multiple windows', () => {
 		server.send('SetHighlightLine', { win: 999, line: 5 });
 		await new Promise(resolve => setTimeout(resolve, 50));
 		// No crash = pass
-	});
-
-	test('_hasOpenWindows tracks window count', async () => {
-		assert.strictEqual((runtime as any)._hasOpenWindows(), false);
-
-		server.send('OpenWindow', {
-			token: 1, name: 'A', filename: 'A.aplf',
-			text: ['A'], stop: [], trace: [], monitor: [],
-		});
-		await new Promise(resolve => setTimeout(resolve, 50));
-		assert.strictEqual((runtime as any)._hasOpenWindows(), true);
-
-		server.send('CloseWindow', { win: 1 });
-		await new Promise(resolve => setTimeout(resolve, 50));
-		assert.strictEqual((runtime as any)._hasOpenWindows(), false);
 	});
 });
 
