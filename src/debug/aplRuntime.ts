@@ -188,7 +188,6 @@ export class AplRuntime extends EventEmitter {
 	public async attachToSuspendedSession(session: AplSession, replId: string, folder: string): Promise<void> {
 		this._session = session;
 		this._replId = replId;
-		this._autoDebug = true;
 		this._noDebug = false;
 		this._sourceFile = '';
 		this._folder = folder;
@@ -219,6 +218,9 @@ export class AplRuntime extends EventEmitter {
 		// This triggers openWindow() -> sets _winId, setHighlightLine() -> emits stopOnStep
 		session.replayPendingMessages();
 		this.log(`attachToSuspendedSession: done, _winId=${this._winId}`);
+
+		// Only now: the link query above brings statuses before any tracer is known.
+		this._autoDebug = true;
 	}
 
 	private async initialiseBreakpoints() {
@@ -418,13 +420,6 @@ export class AplRuntime extends EventEmitter {
 		}
 
 		this.sendEvent('closeWindow', { filename });
-
-		// Auto-terminate: if this was an auto-debug session and all tracer windows are closed,
-		// the suspension has been resolved (user continued, reset, or cut back)
-		if (this._autoDebug && !this._hasOpenWindows()) {
-			this._autoDebug = false;
-			this.sendEvent('end');
-		}
 	}
 
 	private _hasOpenWindows(): boolean {
@@ -501,6 +496,19 @@ export class AplRuntime extends EventEmitter {
 	}
 	private interpreterStatus(x: InterpreterStatusMessage) {
 		this.sendEvent('dyalogStatus', x);
+		this.endAutoDebugIfDone();
+	}
+
+	/**
+	 * An auto-debug session ends once the interpreter is back at the prompt
+	 * with no tracer open. Checked on a status, not on CloseWindow: Continue
+	 * closes the tracer before it reaches the next stop.
+	 */
+	private endAutoDebugIfDone(): void {
+		if (this._autoDebug && !this._hasOpenWindows() && this._session?.state !== 'busy') {
+			this._autoDebug = false;
+			this.sendEvent('end');
+		}
 	}
 	private replyTreeList(x: ReplyTreeListMessage) {
 		this._treelist.resolve(x.nodeId, x);

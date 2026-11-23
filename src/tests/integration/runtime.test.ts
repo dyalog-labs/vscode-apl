@@ -301,49 +301,6 @@ suite('AplRuntime — window management', () => {
 		assert.strictEqual(events.length, 0, 'should not emit for missing window');
 	});
 
-	test('auto-debug ends when last tracer window closes', async () => {
-		(runtime as any)._autoDebug = true;
-		const endEvents: any[] = [];
-		runtime.on('end', () => endEvents.push(true));
-
-		// Open two windows
-		server.send('OpenWindow', {
-			token: 1, name: 'Fn1', filename: 'Fn1.aplf',
-			text: ['Fn1'], stop: [], trace: [], monitor: [],
-		});
-		server.send('OpenWindow', {
-			token: 2, name: 'Fn2', filename: 'Fn2.aplf',
-			text: ['Fn2'], stop: [], trace: [], monitor: [],
-		});
-		await new Promise(resolve => setTimeout(resolve, 50));
-
-		// Close first — should not end
-		server.send('CloseWindow', { win: 1 });
-		await new Promise(resolve => setTimeout(resolve, 50));
-		assert.strictEqual(endEvents.length, 0, 'should not end with windows still open');
-
-		// Close second — should end
-		server.send('CloseWindow', { win: 2 });
-		await new Promise(resolve => setTimeout(resolve, 50));
-		assert.strictEqual(endEvents.length, 1, 'should end when last window closes');
-	});
-
-	test('non-auto-debug does not end on last window close', async () => {
-		(runtime as any)._autoDebug = false;
-		const endEvents: any[] = [];
-		runtime.on('end', () => endEvents.push(true));
-
-		server.send('OpenWindow', {
-			token: 1, name: 'Fn', filename: 'Fn.aplf',
-			text: ['Fn'], stop: [], trace: [], monitor: [],
-		});
-		await new Promise(resolve => setTimeout(resolve, 50));
-
-		server.send('CloseWindow', { win: 1 });
-		await new Promise(resolve => setTimeout(resolve, 50));
-		assert.strictEqual(endEvents.length, 0, 'normal debug should not auto-terminate');
-	});
-
 	test('UpdateWindow updates existing window data', async () => {
 		server.send('OpenWindow', {
 			token: 5, name: 'Fn', filename: 'Fn.aplf',
@@ -386,6 +343,113 @@ suite('AplRuntime — window management', () => {
 		await new Promise(resolve => setTimeout(resolve, 50));
 
 		assert.strictEqual(events.length, 1);
+	});
+});
+
+// ─── Auto-debug lifetime ────────────────────────────────────────────
+
+suite('AplRuntime — auto-debug lifetime', () => {
+	let server: MockRideServer;
+	let session: AplSession;
+	let runtime: AplRuntime;
+	let events: string[];
+
+	setup(async () => {
+		({ server, session, runtime } = await createTestRuntime());
+		(runtime as any)._autoDebug = true;
+		events = [];
+		runtime.on('end', () => events.push('end'));
+		runtime.on('stopOnBreakpoint', () => events.push('stopOnBreakpoint'));
+	});
+
+	teardown(() => teardownTestRuntime(session, server));
+
+	const tracer = (name: string, token = 1) => server.send('OpenWindow', {
+		token, name, filename: `${name}.aplf`, text: [name, 'line1'], stop: [], trace: [], monitor: [], debugger: 1,
+	});
+	const sendStatus = (SI: number) => server.send('InterpreterStatus', {
+		SI, IO: 1, ML: 1, DQ: 0, WA: -1, TRAP: 0, NumThreads: 1, TID: 0, CompactCount: 0, GarbageCount: 0,
+	});
+	/** Sends a status and waits until the runtime has dealt with it and all before it. */
+	const status = async (SI: number) => {
+		const seen = new Promise(resolve => runtime.once('dyalogStatus', resolve));
+		sendStatus(SI);
+		await seen;
+		await new Promise(resolve => setImmediate(resolve));
+	};
+
+	// The message orders below are what Dyalog sends.
+
+	test('Continue closing the tracer on its way to the next stop does not end it', async () => {
+		tracer('Outer');
+		server.send('CloseWindow', { win: 1 });
+		server.send('SetPromptType', { type: 0 });
+		server.send('HadError', { error: 1001, dmx: 0 });
+		tracer('Inner');
+		server.send('SetHighlightLine', { win: 1, line: 1 });
+		server.send('SetPromptType', { type: 1 });
+		await status(2);
+
+		assert.deepStrictEqual(events, ['stopOnBreakpoint']);
+	});
+
+	test('the run finishing ends it', async () => {
+		tracer('Outer');
+		server.send('CloseWindow', { win: 1 });
+		server.send('SetPromptType', { type: 0 });
+		server.send('AppendSessionOutput', { result: '113\n', type: 2, group: 0 });
+		server.send('SetPromptType', { type: 1 });
+		await status(0);
+
+		assert.deepStrictEqual(events, ['end']);
+	});
+
+	test('cutting back the last frame ends it', async () => {
+		tracer('Outer');
+		server.send('CloseWindow', { win: 1 });
+		await status(0);
+
+		assert.deepStrictEqual(events, ['end']);
+	});
+
+	test('a status from a busy interpreter does not end it', async () => {
+		tracer('Outer');
+		server.send('CloseWindow', { win: 1 });
+		server.send('SetPromptType', { type: 0 });
+		await status(1);
+
+		assert.deepStrictEqual(events, []);
+	});
+
+	test('statuses while it attaches to the suspension do not end it', async () => {
+		(runtime as any)._autoDebug = false;
+		session.clearDebugHandler();
+		// The Link query the attach sends is answered as Dyalog does, status included.
+		server.onCommand('Execute', (args: any) => {
+			server.send('EchoInput', { input: args.text });
+			server.send('SetPromptType', { type: 1 });
+			sendStatus(1);
+		});
+		const suspended = new Promise(resolve => session.once('suspended', resolve));
+		server.send('HadError', { error: 1001, dmx: 0 });
+		tracer('Outer');
+		server.send('SetHighlightLine', { win: 1, line: 1 });
+		await suspended;
+
+		await runtime.attachToSuspendedSession(session, 'test', '/folder');
+		await delivered();
+
+		assert.deepStrictEqual(events, ['stopOnBreakpoint']);
+		assert.ok((runtime as any)._autoDebug, 'it is an auto-debug session once attached');
+	});
+
+	test('a debug session that was not started on a suspension does not end this way', async () => {
+		(runtime as any)._autoDebug = false;
+		tracer('Outer');
+		server.send('CloseWindow', { win: 1 });
+		await status(0);
+
+		assert.deepStrictEqual(events, []);
 	});
 });
 

@@ -1,4 +1,5 @@
 import * as assert from 'assert';
+import * as path from 'path';
 import { DyalogBackend, isDyalogAvailable } from '../helpers/testBackend';
 
 /**
@@ -108,6 +109,40 @@ const skip = !process.env.DYALOG_TESTS || !isDyalogAvailable();
 
 		backend.runtime.continue();
 		await new Promise(resolve => setTimeout(resolve, 500));
+	});
+
+	test('a debug session started on a suspension outlives Continue into a stop in another function', async () => {
+		const inner = await backend.defineFunction('StopInner', ['r←StopInner x', 'r←x×2']);
+		const outer = await backend.defineFunction('StopOuter', ['r←StopOuter x', 'r←x+1', 'r←StopInner r']);
+		await backend.runtime.setBreakPoint(outer.filePath, outer.startLine + 1);
+
+		// As the REPL does: run with no debugger attached, then attach to the suspension.
+		backend.session.clearDebugHandler();
+		const suspended = new Promise<void>(resolve => backend.session.once('suspended', () => resolve()));
+		backend.session.execute('StopOuter 5');
+		await suspended;
+		let ended = false;
+		backend.runtime.once('end', () => { ended = true; });
+		await backend.runtime.attachToSuspendedSession(backend.session, 'test', path.dirname(outer.filePath));
+		await new Promise(resolve => setTimeout(resolve, 200));
+		assert.ok(backend.runtime.currentWindow?.name.includes('StopOuter'), 'should be suspended in StopOuter');
+
+		await backend.runtime.setBreakPoint(inner.filePath, inner.startLine + 1);
+
+		const within = (event: string) => new Promise<boolean>(resolve => {
+			backend.runtime.once(event, () => resolve(true));
+			setTimeout(() => resolve(false), 5000);
+		});
+		const stopped = within('stopOnBreakpoint');
+		backend.runtime.continue();
+		assert.ok(await stopped, 'should have stopped in StopInner');
+		await new Promise(resolve => setTimeout(resolve, 200));
+		assert.ok(!ended, 'the debug session ended before the run did');
+		assert.ok(backend.runtime.currentWindow?.name.includes('StopInner'), 'should be suspended in StopInner');
+
+		const finished = within('end');
+		backend.runtime.continue();
+		assert.ok(await finished, 'the debug session should end when the run finishes');
 	});
 });
 
