@@ -1,4 +1,5 @@
 import * as assert from 'assert';
+import * as path from 'path';
 import { DyalogBackend, isDyalogAvailable } from '../helpers/testBackend';
 
 /**
@@ -72,6 +73,104 @@ const skip = !process.env.DYALOG_TESTS || !isDyalogAvailable();
 		// Execute — should NOT suspend (no breakpoint)
 		const output = await backend.execute('ClearMe 10');
 		assert.ok(output.trim().includes('11'), `should get result 11, got: "${output.trim()}"`);
+	});
+
+	test('a breakpoint set while the interpreter is busy does not wait, and is there once it is free', async () => {
+		const { filePath, startLine } = await backend.defineFunction('BusyStop', [
+			'r←BusyStop x',
+			'r←x+1',
+		]);
+
+		const busy = new Promise<void>(resolve => {
+			const onState = (state: string) => {
+				if (state !== 'busy') { return; }
+				backend.session.removeListener('stateChanged', onState);
+				resolve();
+			};
+			backend.session.on('stateChanged', onState);
+		});
+		backend.session.execute('⎕DL 3');
+		await busy;
+
+		const started = Date.now();
+		const bp = await backend.runtime.setBreakPoint(filePath, startLine + 1);
+		const waited = Date.now() - started;
+		assert.ok(waited < 1000, `setBreakPoint waited ${waited} ms for the busy interpreter`);
+		assert.ok(bp.verified, 'breakpoint should be verified');
+
+		// Queued behind ⎕DL and the stop: the call suspends on it.
+		const stopped = new Promise<boolean>(resolve => {
+			backend.runtime.once('stopOnStep', () => resolve(true));
+			backend.runtime.once('stopOnBreakpoint', () => resolve(true));
+			setTimeout(() => resolve(false), 8000);
+		});
+		backend.session.execute('BusyStop 5');
+		assert.ok(await stopped, 'the call should have suspended at the breakpoint');
+
+		backend.runtime.continue();
+		await new Promise(resolve => setTimeout(resolve, 500));
+	});
+
+	test('opening another function in the editor while suspended does not swallow Continue', async () => {
+		const inner = await backend.defineFunction('EditInner', ['r←EditInner x', 'r←x×2']);
+		const outer = await backend.defineFunction('EditOuter', ['r←EditOuter x', 'r←x+1', 'r←EditInner r']);
+		await backend.runtime.setBreakPoint(outer.filePath, outer.startLine + 1);
+
+		const within = (event: string) => new Promise<boolean>(resolve => {
+			backend.runtime.once(event, () => resolve(true));
+			setTimeout(() => resolve(false), 5000);
+		});
+		let stopped = within('stopOnBreakpoint');
+		backend.session.execute('EditOuter 5');
+		assert.ok(await stopped, 'should have stopped in EditOuter');
+
+		// What go to definition sends: the interpreter answers with an edit window.
+		const opened = within('openWindow');
+		backend.session.sendMessage('Edit', { win: 0, pos: 0, text: 'EditInner' });
+		assert.ok(await opened, 'the interpreter should have opened EditInner in an editor');
+		await backend.runtime.setBreakPoint(inner.filePath, inner.startLine + 1);
+
+		stopped = within('stopOnBreakpoint');
+		backend.runtime.continue();
+		assert.ok(await stopped, 'Continue should have run on to the stop in EditInner');
+		assert.ok(backend.runtime.currentWindow?.name.includes('EditInner'), 'should be suspended in EditInner');
+
+		backend.runtime.continue();
+		await new Promise(resolve => setTimeout(resolve, 500));
+	});
+
+	test('a debug session started on a suspension outlives Continue into a stop in another function', async () => {
+		const inner = await backend.defineFunction('StopInner', ['r←StopInner x', 'r←x×2']);
+		const outer = await backend.defineFunction('StopOuter', ['r←StopOuter x', 'r←x+1', 'r←StopInner r']);
+		await backend.runtime.setBreakPoint(outer.filePath, outer.startLine + 1);
+
+		// As the REPL does: run with no debugger attached, then attach to the suspension.
+		backend.session.clearDebugHandler();
+		const suspended = new Promise<void>(resolve => backend.session.once('suspended', () => resolve()));
+		backend.session.execute('StopOuter 5');
+		await suspended;
+		let ended = false;
+		backend.runtime.once('end', () => { ended = true; });
+		await backend.runtime.attachToSuspendedSession(backend.session, 'test', path.dirname(outer.filePath));
+		await new Promise(resolve => setTimeout(resolve, 200));
+		assert.ok(backend.runtime.currentWindow?.name.includes('StopOuter'), 'should be suspended in StopOuter');
+
+		await backend.runtime.setBreakPoint(inner.filePath, inner.startLine + 1);
+
+		const within = (event: string) => new Promise<boolean>(resolve => {
+			backend.runtime.once(event, () => resolve(true));
+			setTimeout(() => resolve(false), 5000);
+		});
+		const stopped = within('stopOnBreakpoint');
+		backend.runtime.continue();
+		assert.ok(await stopped, 'should have stopped in StopInner');
+		await new Promise(resolve => setTimeout(resolve, 200));
+		assert.ok(!ended, 'the debug session ended before the run did');
+		assert.ok(backend.runtime.currentWindow?.name.includes('StopInner'), 'should be suspended in StopInner');
+
+		const finished = within('end');
+		backend.runtime.continue();
+		assert.ok(await finished, 'the debug session should end when the run finishes');
 	});
 });
 

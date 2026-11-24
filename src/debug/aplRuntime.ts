@@ -188,7 +188,6 @@ export class AplRuntime extends EventEmitter {
 	public async attachToSuspendedSession(session: AplSession, replId: string, folder: string): Promise<void> {
 		this._session = session;
 		this._replId = replId;
-		this._autoDebug = true;
 		this._noDebug = false;
 		this._sourceFile = '';
 		this._folder = folder;
@@ -219,10 +218,12 @@ export class AplRuntime extends EventEmitter {
 		// This triggers openWindow() -> sets _winId, setHighlightLine() -> emits stopOnStep
 		session.replayPendingMessages();
 		this.log(`attachToSuspendedSession: done, _winId=${this._winId}`);
+
+		// Only now: the link query above brings statuses before any tracer is known.
+		this._autoDebug = true;
 	}
 
 	private async initialiseBreakpoints() {
-		// Set breakpoints sequentially — exec can only track one echo at a time
 		for (const [filePath, bps] of this._breakPoints) {
 			await this.setBreakPointOnFile(bps, filePath);
 		}
@@ -395,8 +396,10 @@ export class AplRuntime extends EventEmitter {
 			this.sendEvent('stopOnStep');
 		}
 	}
+	/** Record a window. Only a tracer becomes the one Continue and the steps act on, never an edit window. */
 	private updateWindow(x: OpenWindowMessage) {
 		this._windows[x.token] = x;
+		if (x.debugger) { this._winId = x.token; }
 	}
 	private replySaveChanges(x: ReplySaveChangesMessage) {
 		if (x.err) {
@@ -419,17 +422,10 @@ export class AplRuntime extends EventEmitter {
 		}
 
 		this.sendEvent('closeWindow', { filename });
-
-		// Auto-terminate: if this was an auto-debug session and all tracer windows are closed,
-		// the suspension has been resolved (user continued, reset, or cut back)
-		if (this._autoDebug && !this._hasOpenWindows()) {
-			this._autoDebug = false;
-			this.sendEvent('end');
-		}
 	}
 
-	private _hasOpenWindows(): boolean {
-		return Object.keys(this._windows).length > 0;
+	private _hasOpenTracer(): boolean {
+		return Object.values(this._windows).some(w => w.debugger);
 	}
 
 
@@ -456,8 +452,7 @@ export class AplRuntime extends EventEmitter {
 				stops: x.stop ?? [],
 			});
 		}
-		this._windows[x.token] = x;
-		this._winId = x.token;
+		this.updateWindow(x);
 		const filename = Path.resolve(x.filename);
 		this.sendEvent('openWindow', { filename });
 		this.verifyBreakpoints(filename, x.stop);
@@ -502,6 +497,19 @@ export class AplRuntime extends EventEmitter {
 	}
 	private interpreterStatus(x: InterpreterStatusMessage) {
 		this.sendEvent('dyalogStatus', x);
+		this.endAutoDebugIfDone();
+	}
+
+	/**
+	 * An auto-debug session ends once the interpreter is back at the prompt
+	 * with no tracer open. Checked on a status, not on CloseWindow: Continue
+	 * closes the tracer before it reaches the next stop.
+	 */
+	private endAutoDebugIfDone(): void {
+		if (this._autoDebug && !this._hasOpenTracer() && this._session?.state !== 'busy') {
+			this._autoDebug = false;
+			this.sendEvent('end');
+		}
 	}
 	private replyTreeList(x: ReplyTreeListMessage) {
 		this._treelist.resolve(x.nodeId, x);
@@ -789,9 +797,11 @@ export class AplRuntime extends EventEmitter {
 			filePath,
 			linkInfo,
 		);
+		// Not waited for: the interpreter runs its input in order, and a busy one
+		// echoes a line only when it gets to it, if it echoes at all.
 		for (const aplName of Object.keys(stops)) {
 			const lines = stops[aplName].join(' ');
-			await this.exec(0, `{}${lines} ⎕STOP '${aplName}'`, 1);
+			await this.exec(0, `{}${lines} ⎕STOP '${aplName}'`);
 		}
 		for (const bp of matched) {
 			bp.verified = true;
@@ -824,7 +834,7 @@ export class AplRuntime extends EventEmitter {
 		// Clear stops on ALL functions in this file, not just one
 		for (const row of this._session?.linkInfo ?? []) {
 			if (normPath(row.filePath) === filePath) {
-				await this.exec(0, `{}⍬ ⎕STOP '${row.aplName}'`, 1);
+				await this.exec(0, `{}⍬ ⎕STOP '${row.aplName}'`);
 			}
 		}
 	}

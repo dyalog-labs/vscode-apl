@@ -46,6 +46,9 @@ function teardownTestRuntime(session: AplSession, server: MockRideServer) {
 	server.stop();
 }
 
+/** Lets what the runtime just sent reach the mock server. */
+const delivered = () => new Promise(resolve => setTimeout(resolve, 50));
+
 // ─── Breakpoint handling ────────────────────────────────────────────
 
 suite('AplRuntime — breakpoint handling', () => {
@@ -65,6 +68,7 @@ suite('AplRuntime — breakpoint handling', () => {
 		]);
 
 		const bp = await runtime.setBreakPoint('/test/file.aplf', 6);
+		await delivered();
 
 		assert.strictEqual(bp.verified, true);
 		const stopCmd = server.getReceived('Execute').find((m: any) => m.text.includes('⎕STOP'));
@@ -87,6 +91,7 @@ suite('AplRuntime — breakpoint handling', () => {
 		]);
 
 		await runtime.setBreakPoint('/test/file.aplf', 13);
+		await delivered();
 
 		const stopCmd = server.getReceived('Execute').find((m: any) => m.text.includes('⎕STOP'));
 		assert.ok(stopCmd);
@@ -102,6 +107,7 @@ suite('AplRuntime — breakpoint handling', () => {
 		await runtime.setBreakPoint('/test/file.aplf', 2);
 		// Second setBreakPoint re-sends for all bps in the file
 		await runtime.setBreakPoint('/test/file.aplf', 5);
+		await delivered();
 
 		// The last ⎕STOP should include both lines
 		const stopCmds = server.getReceived('Execute').filter((m: any) => m.text.includes('⎕STOP'));
@@ -118,6 +124,7 @@ suite('AplRuntime — breakpoint handling', () => {
 
 		await runtime.setBreakPoint('/test/file.aplf', 5);
 		await runtime.setBreakPoint('/test/file.aplf', 25);
+		await delivered();
 
 		const stopCmds = server.getReceived('Execute')
 			.filter((m: any) => m.text.includes('⎕STOP') && !m.text.includes('⍬'));
@@ -143,9 +150,11 @@ suite('AplRuntime — breakpoint handling', () => {
 
 		await runtime.setBreakPoint('/test/file.aplf', 5);
 		await runtime.setBreakPoint('/test/file.aplf', 25);
+		await delivered();
 
 		const countBefore = server.received.length;
 		await runtime.clearBreakpoints('/test/file.aplf');
+		await delivered();
 
 		const newMsgs = server.received.slice(countBefore);
 		const clearCmds = newMsgs
@@ -180,6 +189,53 @@ suite('AplRuntime — breakpoint handling', () => {
 	});
 });
 
+// ─── Breakpoints without an echo ────────────────────────────────────
+
+suite('AplRuntime — breakpoints do not wait for an echo', () => {
+	let server: MockRideServer;
+	let session: AplSession;
+	let runtime: AplRuntime;
+
+	setup(async () => {
+		({ server, session, runtime } = await createTestRuntime());
+		// No echo: a busy interpreter echoes a line only when it gets to it, if at all.
+		server.onCommand('Execute', () => {});
+	});
+
+	teardown(() => teardownTestRuntime(session, server));
+
+	/** Whether `p` settles within 500 ms, far short of the 10 s echo timeout. */
+	const settles = (p: Promise<unknown>) => Promise.race([
+		p.then(() => true),
+		new Promise<boolean>(resolve => setTimeout(() => resolve(false), 500)),
+	]);
+
+	const executed = async () => {
+		await delivered();
+		return server.getReceived('Execute').map((m: any) => m.text);
+	};
+
+	test('a breakpoint is sent and verified without waiting for its echo', async () => {
+		seedLinkInfo(session, [{ aplName: 'Fn1', filePath: '/test/file.aplf', startLine: 0 }]);
+
+		const pending = runtime.setBreakPoint('/test/file.aplf', 2);
+
+		assert.ok(await settles(pending), 'setBreakPoint waited for an echo');
+		assert.ok((await pending).verified);
+		assert.deepStrictEqual(await executed(), ["{}2 ⎕STOP 'Fn1'\n"]);
+	});
+
+	test('clearing a file\'s breakpoints does not wait either', async () => {
+		seedLinkInfo(session, [
+			{ aplName: 'Fn1', filePath: '/test/file.aplf', startLine: 0 },
+			{ aplName: 'Fn2', filePath: '/test/file.aplf', startLine: 20 },
+		]);
+
+		assert.ok(await settles(runtime.clearBreakpoints('/test/file.aplf')), 'clearBreakpoints waited for an echo');
+		assert.deepStrictEqual(await executed(), ["{}⍬ ⎕STOP 'Fn1'\n", "{}⍬ ⎕STOP 'Fn2'\n"]);
+	});
+});
+
 // ─── Window management ──────────────────────────────────────────────
 
 suite('AplRuntime — window management', () => {
@@ -205,6 +261,7 @@ suite('AplRuntime — window management', () => {
 			stop: [],
 			trace: [],
 			monitor: [],
+			debugger: 1,
 		});
 
 		await new Promise(resolve => setTimeout(resolve, 50));
@@ -215,6 +272,37 @@ suite('AplRuntime — window management', () => {
 		assert.strictEqual(events.length, 1);
 	});
 
+	test('an edit window opening while suspended does not take Continue away from the tracer', async () => {
+		server.send('OpenWindow', {
+			token: 1, name: 'Outer', filename: 'Outer.aplf', text: ['Outer', 'Inner'], stop: [], trace: [], monitor: [], debugger: 1,
+		});
+		// What the interpreter answers to Edit (go to definition): an editor, not a tracer.
+		server.send('OpenWindow', {
+			token: 2, name: 'Inner', filename: 'Inner.aplf', text: ['Inner'], stop: [], trace: [], monitor: [], debugger: 0,
+		});
+		await delivered();
+
+		runtime.continue();
+		await delivered();
+
+		assert.deepStrictEqual(server.getReceived('Continue'), [{ win: 1 }]);
+		assert.strictEqual(runtime.currentWindow!.name, 'Outer');
+	});
+
+	test('a tracer that was already open when debugging started is the one Continue acts on', async () => {
+		// No OpenWindow: the interpreter only updates the tracer it already has.
+		server.send('UpdateWindow', {
+			token: 1, name: 'Outer', filename: 'Outer.aplf', text: ['Outer', 'Inner'], stop: [], trace: [], monitor: [], debugger: 1,
+		});
+		server.send('SetHighlightLine', { win: 1, line: 1 });
+		await delivered();
+
+		runtime.continue();
+		await delivered();
+
+		assert.deepStrictEqual(server.getReceived('Continue'), [{ win: 1 }]);
+	});
+
 	test('CloseWindow removes window and emits event', async () => {
 		const closeEvents: any[] = [];
 		runtime.on('closeWindow', (e: any) => closeEvents.push(e));
@@ -222,7 +310,7 @@ suite('AplRuntime — window management', () => {
 		// Open a window first
 		server.send('OpenWindow', {
 			token: 1, name: 'Fn', filename: 'Fn.aplf',
-			text: ['Fn'], stop: [], trace: [], monitor: [],
+			text: ['Fn'], stop: [], trace: [], monitor: [], debugger: 1,
 		});
 		await new Promise(resolve => setTimeout(resolve, 50));
 		assert.ok(runtime.currentWindow);
@@ -243,49 +331,6 @@ suite('AplRuntime — window management', () => {
 		await new Promise(resolve => setTimeout(resolve, 50));
 
 		assert.strictEqual(events.length, 0, 'should not emit for missing window');
-	});
-
-	test('auto-debug ends when last tracer window closes', async () => {
-		(runtime as any)._autoDebug = true;
-		const endEvents: any[] = [];
-		runtime.on('end', () => endEvents.push(true));
-
-		// Open two windows
-		server.send('OpenWindow', {
-			token: 1, name: 'Fn1', filename: 'Fn1.aplf',
-			text: ['Fn1'], stop: [], trace: [], monitor: [],
-		});
-		server.send('OpenWindow', {
-			token: 2, name: 'Fn2', filename: 'Fn2.aplf',
-			text: ['Fn2'], stop: [], trace: [], monitor: [],
-		});
-		await new Promise(resolve => setTimeout(resolve, 50));
-
-		// Close first — should not end
-		server.send('CloseWindow', { win: 1 });
-		await new Promise(resolve => setTimeout(resolve, 50));
-		assert.strictEqual(endEvents.length, 0, 'should not end with windows still open');
-
-		// Close second — should end
-		server.send('CloseWindow', { win: 2 });
-		await new Promise(resolve => setTimeout(resolve, 50));
-		assert.strictEqual(endEvents.length, 1, 'should end when last window closes');
-	});
-
-	test('non-auto-debug does not end on last window close', async () => {
-		(runtime as any)._autoDebug = false;
-		const endEvents: any[] = [];
-		runtime.on('end', () => endEvents.push(true));
-
-		server.send('OpenWindow', {
-			token: 1, name: 'Fn', filename: 'Fn.aplf',
-			text: ['Fn'], stop: [], trace: [], monitor: [],
-		});
-		await new Promise(resolve => setTimeout(resolve, 50));
-
-		server.send('CloseWindow', { win: 1 });
-		await new Promise(resolve => setTimeout(resolve, 50));
-		assert.strictEqual(endEvents.length, 0, 'normal debug should not auto-terminate');
 	});
 
 	test('UpdateWindow updates existing window data', async () => {
@@ -330,6 +375,126 @@ suite('AplRuntime — window management', () => {
 		await new Promise(resolve => setTimeout(resolve, 50));
 
 		assert.strictEqual(events.length, 1);
+	});
+});
+
+// ─── Auto-debug lifetime ────────────────────────────────────────────
+
+suite('AplRuntime — auto-debug lifetime', () => {
+	let server: MockRideServer;
+	let session: AplSession;
+	let runtime: AplRuntime;
+	let events: string[];
+
+	setup(async () => {
+		({ server, session, runtime } = await createTestRuntime());
+		(runtime as any)._autoDebug = true;
+		events = [];
+		runtime.on('end', () => events.push('end'));
+		runtime.on('stopOnBreakpoint', () => events.push('stopOnBreakpoint'));
+	});
+
+	teardown(() => teardownTestRuntime(session, server));
+
+	const tracer = (name: string, token = 1) => server.send('OpenWindow', {
+		token, name, filename: `${name}.aplf`, text: [name, 'line1'], stop: [], trace: [], monitor: [], debugger: 1,
+	});
+	const sendStatus = (SI: number) => server.send('InterpreterStatus', {
+		SI, IO: 1, ML: 1, DQ: 0, WA: -1, TRAP: 0, NumThreads: 1, TID: 0, CompactCount: 0, GarbageCount: 0,
+	});
+	/** Sends a status and waits until the runtime has dealt with it and all before it. */
+	const status = async (SI: number) => {
+		const seen = new Promise(resolve => runtime.once('dyalogStatus', resolve));
+		sendStatus(SI);
+		await seen;
+		await new Promise(resolve => setImmediate(resolve));
+	};
+
+	// The message orders below are what Dyalog sends.
+
+	test('Continue closing the tracer on its way to the next stop does not end it', async () => {
+		tracer('Outer');
+		server.send('CloseWindow', { win: 1 });
+		server.send('SetPromptType', { type: 0 });
+		server.send('HadError', { error: 1001, dmx: 0 });
+		tracer('Inner');
+		server.send('SetHighlightLine', { win: 1, line: 1 });
+		server.send('SetPromptType', { type: 1 });
+		await status(2);
+
+		assert.deepStrictEqual(events, ['stopOnBreakpoint']);
+	});
+
+	test('the run finishing ends it', async () => {
+		tracer('Outer');
+		server.send('CloseWindow', { win: 1 });
+		server.send('SetPromptType', { type: 0 });
+		server.send('AppendSessionOutput', { result: '113\n', type: 2, group: 0 });
+		server.send('SetPromptType', { type: 1 });
+		await status(0);
+
+		assert.deepStrictEqual(events, ['end']);
+	});
+
+	test('cutting back the last frame ends it', async () => {
+		tracer('Outer');
+		server.send('CloseWindow', { win: 1 });
+		await status(0);
+
+		assert.deepStrictEqual(events, ['end']);
+	});
+
+	test('a status from a busy interpreter does not end it', async () => {
+		tracer('Outer');
+		server.send('CloseWindow', { win: 1 });
+		server.send('SetPromptType', { type: 0 });
+		await status(1);
+
+		assert.deepStrictEqual(events, []);
+	});
+
+	test('an edit window left open does not keep it going after the run finishes', async () => {
+		tracer('Outer');
+		server.send('OpenWindow', {
+			token: 2, name: 'Inner', filename: 'Inner.aplf', text: ['Inner'], stop: [], trace: [], monitor: [], debugger: 0,
+		});
+		server.send('CloseWindow', { win: 1 });
+		server.send('SetPromptType', { type: 0 });
+		server.send('SetPromptType', { type: 1 });
+		await status(0);
+
+		assert.deepStrictEqual(events, ['end']);
+	});
+
+	test('statuses while it attaches to the suspension do not end it', async () => {
+		(runtime as any)._autoDebug = false;
+		session.clearDebugHandler();
+		// The Link query the attach sends is answered as Dyalog does, status included.
+		server.onCommand('Execute', (args: any) => {
+			server.send('EchoInput', { input: args.text });
+			server.send('SetPromptType', { type: 1 });
+			sendStatus(1);
+		});
+		const suspended = new Promise(resolve => session.once('suspended', resolve));
+		server.send('HadError', { error: 1001, dmx: 0 });
+		tracer('Outer');
+		server.send('SetHighlightLine', { win: 1, line: 1 });
+		await suspended;
+
+		await runtime.attachToSuspendedSession(session, 'test', '/folder');
+		await delivered();
+
+		assert.deepStrictEqual(events, ['stopOnBreakpoint']);
+		assert.ok((runtime as any)._autoDebug, 'it is an auto-debug session once attached');
+	});
+
+	test('a debug session that was not started on a suspension does not end this way', async () => {
+		(runtime as any)._autoDebug = false;
+		tracer('Outer');
+		server.send('CloseWindow', { win: 1 });
+		await status(0);
+
+		assert.deepStrictEqual(events, []);
 	});
 });
 
@@ -798,18 +963,18 @@ suite('AplRuntime — multiple windows', () => {
 	test('windows are indexed by token, not sequential', async () => {
 		server.send('OpenWindow', {
 			token: 100, name: 'A', filename: 'A.aplf',
-			text: ['A'], stop: [], trace: [], monitor: [],
+			text: ['A'], stop: [], trace: [], monitor: [], debugger: 1,
 		});
 		server.send('OpenWindow', {
 			token: 500, name: 'B', filename: 'B.aplf',
-			text: ['B'], stop: [], trace: [], monitor: [],
+			text: ['B'], stop: [], trace: [], monitor: [], debugger: 1,
 		});
 		await new Promise(resolve => setTimeout(resolve, 50));
 
 		assert.strictEqual((runtime as any)._windows[100].name, 'A');
 		assert.strictEqual((runtime as any)._windows[500].name, 'B');
 		assert.strictEqual((runtime as any)._windows[200], undefined);
-		// Current window is the last one opened
+		// Current window is the last tracer opened
 		assert.strictEqual(runtime.currentWindow!.name, 'B');
 		assert.strictEqual(runtime.winId, 500);
 	});
@@ -855,21 +1020,6 @@ suite('AplRuntime — multiple windows', () => {
 		server.send('SetHighlightLine', { win: 999, line: 5 });
 		await new Promise(resolve => setTimeout(resolve, 50));
 		// No crash = pass
-	});
-
-	test('_hasOpenWindows tracks window count', async () => {
-		assert.strictEqual((runtime as any)._hasOpenWindows(), false);
-
-		server.send('OpenWindow', {
-			token: 1, name: 'A', filename: 'A.aplf',
-			text: ['A'], stop: [], trace: [], monitor: [],
-		});
-		await new Promise(resolve => setTimeout(resolve, 50));
-		assert.strictEqual((runtime as any)._hasOpenWindows(), true);
-
-		server.send('CloseWindow', { win: 1 });
-		await new Promise(resolve => setTimeout(resolve, 50));
-		assert.strictEqual((runtime as any)._hasOpenWindows(), false);
 	});
 });
 
@@ -1019,6 +1169,7 @@ suite('AplDebugSession — setBreakpoints uses args.breakpoints', () => {
 		};
 
 		await (debugSession as any).setBreakPointsRequest(response, args);
+		await delivered();
 
 		const stopCmds = server.getReceived('Execute')
 			.filter((m: any) => m.text.includes('⎕STOP') && !m.text.includes('⍬'));
