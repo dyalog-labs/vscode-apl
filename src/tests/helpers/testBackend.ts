@@ -133,9 +133,6 @@ export class DyalogBackend implements TestBackend {
 		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'apl-test-'));
 		const port = await findFreePort();
 
-		// Create .vscode dir for link.json (same as the extension expects)
-		fs.mkdirSync(path.join(tempDir, '.vscode'), { recursive: true });
-
 		const dyalogExe = findDyalogExe();
 		if (!dyalogExe) throw new Error('Dyalog executable not found');
 
@@ -175,7 +172,7 @@ export class DyalogBackend implements TestBackend {
 
 		const runtime = new AplRuntime(fileAccessor);
 		(runtime as any)._session = session;
-		// Set _folder so loadLinkInfo() knows where to write link.json
+		// Set _folder — loadLinkInfo()/refreshLinkInfo() no-op without one
 		(runtime as any)._folder = tempDir;
 		session.setDebugHandler((command: string, args: any) => {
 			(runtime as any).handleMessage([command, args]);

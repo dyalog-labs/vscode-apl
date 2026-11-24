@@ -1,5 +1,8 @@
 import * as assert from 'assert';
+import * as fs from 'fs';
 import * as path from 'path';
+import * as vscode from 'vscode';
+import { ReplBreakpointSync } from '../../repl/replBreakpointSync';
 import { DyalogBackend, isDyalogAvailable } from '../helpers/testBackend';
 
 /**
@@ -303,5 +306,68 @@ const skip = !process.env.DYALOG_TESTS || !isDyalogAvailable();
 
 		const output = await backend.execute('Outer 4');
 		assert.ok(output.trim().includes('10'), `Outer 4 → Inner 5 → 10, got: "${output.trim()}"`);
+	});
+});
+
+(skip ? suite.skip : suite)('Real Dyalog — breakpoint sync of a large file', () => {
+	let backend: DyalogBackend;
+	let sync: ReplBreakpointSync;
+
+	setup(async () => {
+		backend = await DyalogBackend.create();
+		sync = new ReplBreakpointSync();
+		(sync as unknown as { _session: unknown })._session = backend.session;
+	});
+
+	teardown(async () => {
+		(vscode.debug as unknown as { breakpoints: vscode.Breakpoint[] }).breakpoints = [];
+		sync.dispose();
+		await backend.teardown();
+	});
+
+	test('moving a breakpoint in a file of 300 functions clears the old stop and sets the new one', async () => {
+		// The table is only read while a Link exists.
+		const { filePath: anchor } = await backend.defineFunction('Anchor', ['Anchor', '⍝']);
+		const dir = path.dirname(anchor);
+		const file = path.join(dir, 'Big.apln');
+		const fns = Array.from({ length: 300 }, (_, i) => [` ∇ r←fn${i} x`, '   r←x', ' ∇']).flat();
+		fs.writeFileSync(file, [':Namespace Big', ...fns, ':EndNamespace', ''].join('\n'));
+		await backend._exec(`2 ⎕FIX 'file://${file.replace(/\\/g, '/')}'`);
+		await backend.session.refreshLinkInfo(dir);
+		const row = (n: number) => backend.session.linkInfo.find(r => r.aplName === `#.Big.fn${n}`)!;
+		assert.ok(row(299), 'the table should list the functions of Big');
+
+		const output: string[] = [];
+		backend.session.on('output', (text: string) => output.push(text));
+		/** Puts the only breakpoint on the first line of fn<n> and syncs the file, as a breakpoint change does. */
+		const moveBreakpointTo = (n: number) => {
+			const line = row(n).startLine + 1;
+			(vscode.debug as unknown as { breakpoints: vscode.Breakpoint[] }).breakpoints = [new vscode.SourceBreakpoint({
+				uri: vscode.Uri.file(row(n).filePath),
+				range: new vscode.Range(new vscode.Position(line, 0), new vscode.Position(line, 0)),
+			} as vscode.Location)];
+			(sync as unknown as { _syncBreakpointsForFile(f: string): void })._syncBreakpointsForFile(row(n).filePath);
+		};
+		/** The stops on fn<n>. Input runs in order, so this is read after the sync's lines. */
+		const stops = (n: number) => new Promise<string>((resolve, reject) => {
+			const timer = setTimeout(() => reject(new Error(`no reply about fn${n}`)), 20000);
+			const onOutput = (text: string) => {
+				const m = /<<(.*)>>/.exec(text);
+				if (!m) { return; }
+				clearTimeout(timer);
+				backend.session.removeListener('output', onOutput);
+				resolve(m[1].trim());
+			};
+			backend.session.on('output', onOutput);
+			backend.session.execute(`⎕←'<<',(⍕⎕STOP '#.Big.fn${n}'),'>>'`);
+		});
+
+		moveBreakpointTo(150);
+		assert.strictEqual(await stops(150), '1', 'the stop should be set');
+
+		moveBreakpointTo(151);
+		assert.strictEqual(await stops(150), '', 'the old stop should be gone');
+		assert.strictEqual(await stops(151), '1', 'the new stop should be set');
+		assert.ok(!output.some(o => /ERROR/.test(o)), `the interpreter rejected a line: ${output.find(o => /ERROR/.test(o))}`);
 	});
 });

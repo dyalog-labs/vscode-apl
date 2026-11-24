@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import type { AplSession } from '../session/aplSession';
-import { mapBreakpointsToStops } from '../session/linkBreakpoints';
+import type { AplSession, LinkInfoRow } from '../session/aplSession';
+import { CLEAR_ALL_STOPS, mapBreakpointsToStops, packStatements, setStopsStatement } from '../session/linkBreakpoints';
 import { normPath } from '../utils';
 
 /**
@@ -78,25 +78,44 @@ export class ReplBreakpointSync implements vscode.Disposable {
 	// --- Private ---
 
 	private async _onBreakpointsChanged(e: vscode.BreakpointsChangeEvent): Promise<void> {
-		if (!this._session?.isConnected || this._debugSessionActive) { return; }
-
-		// Ensure linkInfo is loaded — usually already done on session 'ready'.
-		await this._session.loadLinkInfo(this._folder);
-		if (this._session.linkInfo.length === 0) { return; }
+		const session = this._session;
+		if (!session?.isConnected || this._debugSessionActive) { return; }
 
 		const affectedFiles = new Set<string>();
 		for (const bp of [...e.added, ...e.removed, ...e.changed]) {
-			if (bp instanceof vscode.SourceBreakpoint) {
+			if (bp instanceof vscode.SourceBreakpoint && bp.location.uri.scheme === 'file') {
 				affectedFiles.add(normPath(bp.location.uri.fsPath));
 			}
 		}
+		if (affectedFiles.size === 0) { return; }
 
+		const before = session.linkInfo;
+		await session.loadLinkInfo(this._folder);
+		// An unknown APL file may have been fixed since the fetch: fetch again,
+		// unless the interpreter is not answering.
+		const known = new Set(session.linkInfo.map(r => normPath(r.filePath)));
+		if (!session.linkInfoBackingOff && [...affectedFiles].some(f => !known.has(f) && isAplDocument(f))) {
+			await session.refreshLinkInfo(this._folder);
+		}
+		// A fetch can take a minute: the session may be gone by now, or a debugger attached.
+		if (this._session !== session || !session.isConnected || this._debugSessionActive) { return; }
+
+		// A table that changed may have moved any file's breakpoints, not only these.
+		if (!sameRows(before, session.linkInfo)) {
+			this._syncAllBreakpoints();
+			return;
+		}
 		for (const filePath of affectedFiles) {
 			this._syncBreakpointsForFile(filePath);
 		}
 	}
 
-	private _syncBreakpointsForFile(filePath: string): void {
+	/**
+	 * Bring ⎕STOP for the file's functions in line with VS Code in as few
+	 * lines as possible: clears for functions without breakpoints (skipped
+	 * when CLEAR_ALL_STOPS just ran) and one set per function with them.
+	 */
+	private _syncBreakpointsForFile(filePath: string, clearOthers = true): void {
 		if (!this._session?.isConnected) { return; }
 
 		const linkInfo = this._session.linkInfo;
@@ -115,45 +134,53 @@ export class ReplBreakpointSync implements vscode.Disposable {
 			linkInfo,
 		);
 
-		// Find all APL functions mapped to this file
-		const allFunctions = new Set(
-			linkInfo
-				.filter(r => normPath(r.filePath) === normalizedPath)
-				.map(r => r.aplName)
-		);
-
-		// Clear stops on functions that no longer have breakpoints
-		// Use error guard (0::⍬) to skip non-stoppable items (namespaces, classes)
-		for (const aplName of allFunctions) {
-			if (!stops[aplName]) {
-				this._session.execute(`{0::⍬ ⋄ ⍬ ⎕STOP ⍵}'${aplName}'`);
-			}
+		const statements: string[] = [];
+		if (clearOthers) {
+			const toClear = new Set(
+				linkInfo
+					.filter(r => normPath(r.filePath) === normalizedPath && !stops[r.aplName])
+					.map(r => r.aplName)
+			);
+			for (const aplName of toClear) { statements.push(setStopsStatement(aplName, [])); }
+		}
+		for (const aplName of Object.keys(stops)) {
+			statements.push(setStopsStatement(aplName, stops[aplName]));
 		}
 
-		// Set stops on functions that have breakpoints
-		for (const aplName of Object.keys(stops)) {
-			const lines = stops[aplName].join(' ');
-			this._session.execute(`{0::⍬ ⋄ ${lines} ⎕STOP ⍵}'${aplName}'`);
+		for (const line of packStatements(statements)) {
+			this._session.execute(line);
 		}
 	}
 
+	/**
+	 * Full sync: one line clears the stops of every function the interpreter
+	 * loaded from a file, including those left by debugging or set by hand;
+	 * then the files with breakpoints are set.
+	 */
 	private _syncAllBreakpoints(): void {
 		if (!this._session?.isConnected) { return; }
-		const linkInfo = this._session.linkInfo;
-		if (linkInfo.length === 0) { return; }
+		if (this._session.linkInfo.length === 0) { return; }
 
-		// Include all linked files so stale ⎕STOP from debug sessions get cleared
-		const allFiles = new Set(
-			linkInfo.map(r => normPath(r.filePath))
-		);
+		this._session.execute(CLEAR_ALL_STOPS);
+
+		const filesWithBreakpoints = new Set<string>();
 		for (const bp of vscode.debug.breakpoints) {
-			if (bp instanceof vscode.SourceBreakpoint) {
-				allFiles.add(normPath(bp.location.uri.fsPath));
+			if (bp instanceof vscode.SourceBreakpoint && bp.location.uri.scheme === 'file') {
+				filesWithBreakpoints.add(normPath(bp.location.uri.fsPath));
 			}
 		}
-
-		for (const filePath of allFiles) {
-			this._syncBreakpointsForFile(filePath);
+		for (const filePath of filesWithBreakpoints) {
+			this._syncBreakpointsForFile(filePath, false);
 		}
 	}
+}
+
+function sameRows(a: readonly LinkInfoRow[], b: readonly LinkInfoRow[]): boolean {
+	return a.length === b.length && a.every((r, i) =>
+		r.aplName === b[i].aplName && r.filePath === b[i].filePath && r.startLine === b[i].startLine);
+}
+
+/** Whether VS Code shows the file as APL; other languages are not Link's business. */
+function isAplDocument(path: string): boolean {
+	return vscode.workspace.textDocuments.some(d => d.languageId === 'apl' && normPath(d.uri.fsPath) === path);
 }

@@ -145,6 +145,11 @@ export class MockRideServer {
 		this._client.write(buf);
 	}
 
+	/** Close the connection from the interpreter's side, as when it exits. */
+	public hangUp(): void {
+		this._client?.end();
+	}
+
 	/**
 	 * Get messages received with a specific command name.
 	 */
